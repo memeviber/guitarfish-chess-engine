@@ -54,6 +54,12 @@ Perft test on the standard starting position:
 
 ---
 
+## About the Name
+
+The engine is named after the **guitarfish** (*Rhinobatidae*), a real family of rays characterized by a flattened body and an elongated snout resembling an acoustic guitar.
+
+---
+
 ## Requirements
 
 - Python 3.9 or higher
