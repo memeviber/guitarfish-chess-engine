@@ -8,11 +8,17 @@ Guitarfish (5.3.28@6.4) is an open-source UCI-compliant chess engine written in 
 
 Guitarfish runs live as an official bot on Lichess: [@guitarfish-engine](https://lichess.org/@/guitarfish-engine).
 
-- **Rapid Rating:** ~2100 ELO
-- **Blitz Rating:** ~1880 ELO
+- **Rapid Rating:** ~2000 ELO
+- **Blitz Rating:** ~1800 ELO
 - **Challenge Policy:** Currently configured to accept **Blitz** and **Rapid** challenges only.
 
 > **Note:** The engine is self-hosted on a local machine. If the bot is offline or not responding, the server is likely turned off while the author is away at school =)))
+
+---
+
+## About the Name
+
+The engine is named after the **guitarfish** (*Rhinobatidae*), a real family of rays characterized by a flattened body and an elongated snout resembling an acoustic guitar.
 
 ---
 
@@ -64,12 +70,6 @@ Perft test on the standard starting position:
 | :--- | :--- | :--- | :--- | :--- |
 | `python-chess` (baseline) | 4 | 197,281 | 1.83 s | ~108,000 NPS |
 | **`custom bitboard` (Numba JIT)** | 4 | 197,281 | 0.034 s | **~5,720,000 NPS** |
-
----
-
-## About the Name
-
-The engine is named after the **guitarfish** (*Rhinobatidae*), a real family of rays characterized by a flattened body and an elongated snout resembling an acoustic guitar.
 
 ---
 
