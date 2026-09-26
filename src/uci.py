@@ -11,7 +11,7 @@ def uci_loop(model_path="guitarfish.gm", book_path="book.bin"):
     board = chess.Board()
 
     author = evaluator.metadata.get("author", "MemeViber")
-    desc = evaluator.metadata.get("description", "5.3.28@6.4")
+    desc = evaluator.metadata.get("description", "5.3.29@6.4")
 
     while True:
         try:
