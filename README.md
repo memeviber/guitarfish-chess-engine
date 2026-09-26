@@ -22,6 +22,7 @@ Guitarfish runs live as an official bot on Lichess: [@guitarfish-engine](https:/
 - **Evaluation:** Custom NNUE architecture with 1,729 board features (Piece-Square tables, Combat Maps, King Safety zones, and Pawn Phalanxes/Chains), quantized to INT8 for CPU inference.
 - **Search Algorithm:** Negamax with Principal Variation Search (PVS) and Alpha-Beta pruning.
 - **Pruning & Reductions:**
+  - Singular Extensions (SE)
   - Null Move Pruning (NMP)
   - Reverse Futility Pruning (RFP)
   - Futility Pruning (FP)

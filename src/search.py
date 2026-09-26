@@ -37,7 +37,8 @@ class TranspositionTable:
         idx = zobrist & self.mask
         entry = self.table[idx]
         if entry is None or depth >= entry[1] or flag == 0:
-            self.table[idx] = (zobrist, depth, flag, score, move)
+            stored_move = move if move is not None else (entry[4] if entry else None)
+            self.table[idx] = (zobrist, depth, flag, score, stored_move)
 
     def probe(self, zobrist, depth, alpha, beta, ply):
         entry = self.table[zobrist & self.mask]
@@ -169,7 +170,17 @@ class Searcher:
 
         return alpha
 
-    def negamax(self, board, depth, alpha, beta, ply, allow_nmp=True, prev_move=None):
+    def negamax(
+        self,
+        board,
+        depth,
+        alpha,
+        beta,
+        ply,
+        allow_nmp=True,
+        prev_move=None,
+        excluded_move=None,
+    ):
         self.nodes += 1
         if ply < MAX_PLY:
             self.pv_lines[ply] = []
@@ -185,14 +196,29 @@ class Searcher:
             return self.evaluator.evaluate(board)
 
         zobrist = chess.polyglot.zobrist_hash(board)
-        tt_data = self.tt.probe(zobrist, depth, alpha, beta, ply)
+        tt_entry = self.tt.get(zobrist)
         tt_move = None
-        if tt_data is not None:
-            if isinstance(tt_data, int):
-                if ply > 0:
-                    return tt_data
-            else:
-                tt_move = tt_data
+        tt_score = None
+        tt_depth = 0
+        tt_flag = -1
+
+        if tt_entry is not None:
+            _, tt_depth, tt_flag, tt_score, tt_move = tt_entry
+            if tt_score > MATE_VALUE - 1000:
+                tt_score -= ply
+            elif tt_score < -MATE_VALUE + 1000:
+                tt_score += ply
+
+            if excluded_move is None and tt_depth >= depth:
+                if tt_flag == 0:
+                    if ply > 0:
+                        return tt_score
+                elif tt_flag == 1 and tt_score <= alpha:
+                    if ply > 0:
+                        return alpha
+                elif tt_flag == 2 and tt_score >= beta:
+                    if ply > 0:
+                        return beta
 
         in_check = board.is_check()
         if depth <= 0:
@@ -207,7 +233,12 @@ class Searcher:
             self.eval_stack[ply] = static_eval
             improving = False
 
-        if not in_check and depth <= 6 and abs(beta) < MATE_VALUE - 1000:
+        if (
+            not in_check
+            and depth <= 6
+            and abs(beta) < MATE_VALUE - 1000
+            and excluded_move is None
+        ):
             rfp_margin = (80 - 20 * improving) * depth
             if static_eval - rfp_margin >= beta:
                 return static_eval - rfp_margin
@@ -218,6 +249,7 @@ class Searcher:
             and ply > 0
             and depth >= 3
             and static_eval >= beta
+            and excluded_move is None
         ):
             if board.piece_count() > 5:
                 null_move = chess.Move.null()
@@ -231,6 +263,7 @@ class Searcher:
                     ply + 1,
                     False,
                     None,
+                    None,
                 )
                 board.pop()
 
@@ -239,8 +272,38 @@ class Searcher:
                 if null_score >= beta:
                     return beta
 
+        singular_extension = False
+        if (
+            depth >= 8
+            and tt_move is not None
+            and excluded_move is None
+            and ply > 0
+            and tt_depth >= depth - 3
+            and tt_flag != 1
+            and abs(tt_score) < MATE_VALUE - 1000
+        ):
+            singular_margin = 2 * depth
+            singular_beta = tt_score - singular_margin
+            singular_depth = (depth - 1) // 2
+
+            s_score = self.negamax(
+                board,
+                singular_depth,
+                singular_beta - 1,
+                singular_beta,
+                ply,
+                False,
+                prev_move,
+                excluded_move=tt_move,
+            )
+
+            if s_score < singular_beta:
+                singular_extension = True
+
         legal_moves = list(board.legal_moves)
         if not legal_moves:
+            if excluded_move:
+                return alpha
             return -MATE_VALUE + ply if in_check else 0
 
         legal_moves.sort(
@@ -255,16 +318,24 @@ class Searcher:
         quiets_searched = []
 
         for move in legal_moves:
+            if move == excluded_move:
+                continue
+
             is_cap = board.is_capture(move)
             board.push(move)
             moves_searched += 1
 
-            extension = 1 if (board.is_check() and ply < 32) else 0
+            extension = 0
+            if board.is_check() and ply < 32:
+                extension = 1
+            elif move == tt_move and singular_extension:
+                extension = 1
+
             new_depth = depth - 1 + extension
 
             if moves_searched == 1:
                 score = -self.negamax(
-                    board, new_depth, -beta, -alpha, ply + 1, True, move
+                    board, new_depth, -beta, -alpha, ply + 1, True, move, None
                 )
             else:
                 r = 0
@@ -289,10 +360,11 @@ class Searcher:
                     ply + 1,
                     True,
                     move,
+                    None,
                 )
                 if score > alpha and (score < beta or r > 0):
                     score = -self.negamax(
-                        board, new_depth, -beta, -alpha, ply + 1, True, move
+                        board, new_depth, -beta, -alpha, ply + 1, True, move, None
                     )
 
             board.pop()
@@ -335,13 +407,15 @@ class Searcher:
                             self.history[key_bad] = self.history.get(key_bad, 0) - bonus
                 break
 
-        flag = 0
-        if best_score <= alpha_orig:
-            flag = 1
-        elif best_score >= beta:
-            flag = 2
+        if excluded_move is None:
+            flag = 0
+            if best_score <= alpha_orig:
+                flag = 1
+            elif best_score >= beta:
+                flag = 2
 
-        self.tt.store(zobrist, depth, flag, best_score, best_move_found, ply)
+            self.tt.store(zobrist, depth, flag, best_score, best_move_found, ply)
+
         return best_score
 
     def get_pv_from_tt(self, board, max_length=64):
