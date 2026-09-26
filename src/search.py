@@ -1,21 +1,7 @@
-#!/usr/bin/env python3
-import io
-import json
 import math
-import os
-import sys
 import time
-import zipfile
 
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-
-import numpy as np
-import onnxruntime as ort
-from numba import njit
-
-from src import bitboard as chess
+import src.bitboard as chess
 
 PIECE_VALUES = {
     chess.PAWN: 100,
@@ -28,126 +14,11 @@ PIECE_VALUES = {
 
 MATE_VALUE = 30000
 MAX_PLY = 64
-DEFAULT_WDL_SCALE = 410.0
 
 LMR_TABLE = [[0 for _ in range(64)] for _ in range(64)]
 for d in range(1, 64):
     for mc in range(1, 64):
         LMR_TABLE[d][mc] = int(0.75 + math.log(d) * math.log(mc) / 2.25)
-
-
-@njit(cache=True, fastmath=True)
-def accumulate_features(out_acc, ft_w, ft_b, indices, count):
-    for j in range(ft_b.shape[0]):
-        out_acc[j] = ft_b[j]
-    for i in range(count):
-        row = ft_w[indices[i]]
-        for j in range(ft_b.shape[0]):
-            out_acc[j] += row[j]
-
-
-def resolve_resource_path(resource_path):
-    if os.path.exists(resource_path):
-        return resource_path
-    if hasattr(sys, "_MEIPASS"):
-        bundled_path = os.path.join(sys._MEIPASS, resource_path)
-        if os.path.exists(bundled_path):
-            return bundled_path
-        default_bundled = os.path.join(sys._MEIPASS, os.path.basename(resource_path))
-        if os.path.exists(default_bundled):
-            return default_bundled
-    return resource_path
-
-
-class Evaluator:
-    def __init__(self, model_path="guitarfish_v2.gm"):
-        model_path = resolve_resource_path(model_path)
-        options = ort.SessionOptions()
-        options.inter_op_num_threads = 1
-        options.intra_op_num_threads = 1
-        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-
-        self.metadata = {}
-        self.wdl_scale = DEFAULT_WDL_SCALE
-
-        if model_path.endswith(".gm") or model_path.endswith(".zip"):
-            if not os.path.exists(model_path):
-                raise FileNotFoundError(f"Model file not found: {model_path}")
-
-            with zipfile.ZipFile(model_path, "r") as z:
-                if "metadata.json" in z.namelist():
-                    self.metadata = json.loads(z.read("metadata.json").decode("utf-8"))
-                    self.wdl_scale = float(
-                        self.metadata.get("wdl_scale", DEFAULT_WDL_SCALE)
-                    )
-
-                npz_bytes = z.read("weights.npz")
-                with np.load(io.BytesIO(npz_bytes)) as w:
-                    self.ft_w = np.ascontiguousarray(w["ft_weight"], dtype=np.float32)
-                    self.ft_b = np.ascontiguousarray(w["ft_bias"], dtype=np.float32)
-
-                onnx_bytes = z.read("mlp_int8.onnx")
-                self.session = ort.InferenceSession(
-                    onnx_bytes, sess_options=options, providers=["CPUExecutionProvider"]
-                )
-        else:
-            feature_path = "guitarfish_weights.npz"
-            onnx_path = (
-                model_path
-                if model_path.endswith(".onnx")
-                else "guitarfish_mlp_int8.onnx"
-            )
-            with np.load(feature_path) as w:
-                self.ft_w = np.ascontiguousarray(w["ft_weight"], dtype=np.float32)
-                self.ft_b = np.ascontiguousarray(w["ft_bias"], dtype=np.float32)
-            self.session = ort.InferenceSession(
-                onnx_path, sess_options=options, providers=["CPUExecutionProvider"]
-            )
-
-        self.l1_size = self.ft_b.shape[0]
-        self.buf_stm_indices = np.empty(256, dtype=np.int64)
-        self.buf_opp_indices = np.empty(256, dtype=np.int64)
-        self.acc_stm = np.empty(self.l1_size, dtype=np.float32)
-        self.acc_opp = np.empty(self.l1_size, dtype=np.float32)
-        self.onnx_input = np.empty((1, self.l1_size * 2), dtype=np.float32)
-
-        self._warmup()
-
-    def _warmup(self):
-        for _ in range(3):
-            chess.Board().perft(4)
-            self.session.run(
-                None,
-                {"features": np.zeros((1, self.l1_size * 2), dtype=np.float32)},
-            )
-
-    def evaluate(self, board: chess.Board):
-        stm_cnt, opp_cnt = chess.extract_indices(
-            board._pieces,
-            board.turn,
-            self.buf_stm_indices,
-            self.buf_opp_indices,
-        )
-        accumulate_features(
-            self.acc_stm,
-            self.ft_w,
-            self.ft_b,
-            self.buf_stm_indices,
-            stm_cnt,
-        )
-        accumulate_features(
-            self.acc_opp,
-            self.ft_w,
-            self.ft_b,
-            self.buf_opp_indices,
-            opp_cnt,
-        )
-
-        self.onnx_input[0, : self.l1_size] = self.acc_stm
-        self.onnx_input[0, self.l1_size :] = self.acc_opp
-
-        logit = self.session.run(None, {"features": self.onnx_input})[0][0, 0]
-        return int(logit * np.float32(self.wdl_scale))
 
 
 class TranspositionTable:
@@ -200,7 +71,6 @@ class TranspositionTable:
 class Searcher:
     def __init__(self, evaluator, book_path="book.bin"):
         self.evaluator = evaluator
-        book_path = resolve_resource_path(book_path)
         self.book = chess.polyglot.open_reader(book_path)
         self.tt = TranspositionTable(size_mb=256)
         self.history = {}
@@ -601,106 +471,3 @@ class Searcher:
             print(f"bestmove {best_move}")
         else:
             print(f"bestmove {legal_moves[0].uci()}")
-
-
-def uci_loop(model_path="guitarfish_v2.gm", book_path="book.bin"):
-    evaluator = Evaluator(model_path)
-    searcher = Searcher(evaluator, book_path)
-    board = chess.Board()
-
-    author = evaluator.metadata.get("author", "MemeViber")
-    desc = evaluator.metadata.get("description", "INT8")
-
-    while True:
-        try:
-            line = sys.stdin.readline()
-            if not line:
-                break
-            line = line.strip()
-        except EOFError:
-            break
-
-        if not line:
-            continue
-
-        parts = line.split()
-        cmd = parts[0]
-
-        if cmd == "uci":
-            print(f"id name Guitarfish [{desc}]")
-            print(f"id author {author}")
-            print("uciok")
-            sys.stdout.flush()
-        elif cmd == "isready":
-            print("readyok")
-            sys.stdout.flush()
-        elif cmd == "ucinewgame":
-            board.reset()
-            searcher.tt.clear()
-            searcher.history.clear()
-            searcher.counter_moves.clear()
-        elif cmd == "position":
-            idx = parts.index("moves") if "moves" in parts else -1
-            if parts[1] == "startpos":
-                board.reset()
-                moves = parts[idx + 1 :] if idx != -1 else []
-            elif parts[1] == "fen":
-                fen = " ".join(parts[2:idx]) if idx != -1 else " ".join(parts[2:])
-                board.set_fen(fen)
-                moves = parts[idx + 1 :] if idx != -1 else []
-            for m in moves:
-                board.push(chess.Move.from_uci(m))
-        elif cmd == "go":
-            wtime = btime = 0
-            winc = binc = 0
-            movetime = None
-            depth = None
-
-            if "wtime" in parts:
-                wtime = int(parts[parts.index("wtime") + 1])
-            if "btime" in parts:
-                btime = int(parts[parts.index("btime") + 1])
-            if "winc" in parts:
-                winc = int(parts[parts.index("winc") + 1])
-            if "binc" in parts:
-                binc = int(parts[parts.index("binc") + 1])
-            if "movetime" in parts:
-                movetime = int(parts[parts.index("movetime") + 1])
-            if "depth" in parts:
-                depth = int(parts[parts.index("depth") + 1])
-
-            time_left = (wtime if board.turn == chess.WHITE else btime) / 1000.0
-            inc = (winc if board.turn == chess.WHITE else binc) / 1000.0
-
-            last_opp_move = (
-                board.move_stack[-1].uci() if len(board.move_stack) > 0 else None
-            )
-            if (
-                time_left > 0
-                and time_left < 3.0
-                and searcher.expected_opponent_move == last_opp_move
-                and searcher.premove_reply is not None
-            ):
-                premove = chess.Move.from_uci(searcher.premove_reply)
-                if board.is_legal(premove):
-                    print(f"bestmove {searcher.premove_reply}")
-                    sys.stdout.flush()
-                    continue
-
-            if depth:
-                searcher.search(board, time_limit=9999, fixed_depth=depth)
-            elif movetime:
-                searcher.search(board, time_limit=movetime / 1000.0)
-            else:
-                if time_left <= 0:
-                    alloc = 1.0
-                elif time_left < 2.0:
-                    alloc = 0.05
-                elif time_left < 5.0:
-                    alloc = 0.15
-                else:
-                    alloc = max(0.08, (time_left - 0.5) / 25.0 + inc * 0.75)
-                searcher.search(board, time_limit=alloc)
-            sys.stdout.flush()
-        elif cmd == "quit":
-            break

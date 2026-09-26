@@ -719,12 +719,8 @@ def see(pieces, white_to_move, from_sq, to_sq):
     occupied &= ~from_bit
     side = not white_to_move
 
-    bishops_queens = (
-        pieces[2] | pieces[8] | pieces[4] | pieces[10]
-    )
-    rooks_queens = (
-        pieces[3] | pieces[9] | pieces[4] | pieces[10]
-    )
+    bishops_queens = pieces[2] | pieces[8] | pieces[4] | pieces[10]
+    rooks_queens = pieces[3] | pieces[9] | pieces[4] | pieces[10]
 
     w_pawns_att = (
         ((target_bit >> np.uint64(7)) & ~_FILE_A)
@@ -740,12 +736,7 @@ def see(pieces, white_to_move, from_sq, to_sq):
     rooks_att = _rook_attacks(to_sq, occupied) & rooks_queens
 
     attackers = (
-        w_pawns_att
-        | b_pawns_att
-        | knights_att
-        | kings_att
-        | bishops_att
-        | rooks_att
+        w_pawns_att | b_pawns_att | knights_att | kings_att | bishops_att | rooks_att
     )
 
     while True:
@@ -838,9 +829,7 @@ def _apply_encoded(pieces, white_to_move, castling, ep_square, value):
         pieces[own_start + ROOK - 1] &= ~(
             np.uint64(1) << np.uint64(rook_from + rank_offset)
         )
-        pieces[own_start + ROOK - 1] |= np.uint64(1) << np.uint64(
-            rook_to + rank_offset
-        )
+        pieces[own_start + ROOK - 1] |= np.uint64(1) << np.uint64(rook_to + rank_offset)
 
     if moving_type == KING:
         castling &= ~(3 if white_to_move else 12)
@@ -938,6 +927,8 @@ def _perft_encoded(pieces, white_to_move, castling, ep_square, depth):
 
 
 # fmt: off
+# Standard PolyGlot Zobrist hashing keys defined by Fabien Letouzey
+# Required for binary PolyGlot opening book (.bin) compatibility
 _POLYGLOT_KEYS = np.array(
     [
         0x9D39247E33776D41, 0x2AF7398005AAA5C7, 0x44DB015024623547, 0x9C15F73E62A76AE2,
@@ -1489,9 +1480,7 @@ class Board:
             captured_index = (captured.piece_type - 1) + (0 if captured.color else 6)
             self._pieces[captured_index] &= ~target_bit
         if is_ep:
-            capture_square = (
-                move.to_square - 8 if moving.color else move.to_square + 8
-            )
+            capture_square = move.to_square - 8 if moving.color else move.to_square + 8
             self._pieces[(PAWN - 1) + (0 if not moving.color else 6)] &= ~(
                 np.uint64(1) << np.uint64(capture_square)
             )
