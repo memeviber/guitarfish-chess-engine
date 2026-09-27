@@ -6,15 +6,6 @@ import numpy as np
 
 import src.bitboard as chess
 
-PIECE_VALUES = {
-    chess.PAWN: 100,
-    chess.KNIGHT: 300,
-    chess.BISHOP: 300,
-    chess.ROOK: 500,
-    chess.QUEEN: 900,
-    chess.KING: 0,
-}
-
 PIECE_VALS = np.array([0, 100, 300, 300, 500, 900, 20000], dtype=np.int32)
 
 MATE_VALUE = 30000
@@ -351,8 +342,7 @@ class Searcher:
             and excluded_move is None
         ):
             rfp_margin = (
-                self.params["rfp_base"]
-                - self.params["rfp_improving"] * int(improving)
+                self.params["rfp_base"] - self.params["rfp_improving"] * int(improving)
             ) * depth
             if static_eval - rfp_margin >= beta:
                 return static_eval - rfp_margin
@@ -370,9 +360,7 @@ class Searcher:
                 board.push(null_move)
                 r_div = max(1.0, float(self.params["nmp_divisor"]))
                 R = int(
-                    self.params["nmp_base"]
-                    + (depth // r_div)
-                    + (1 if improving else 0)
+                    self.params["nmp_base"] + (depth // r_div) + (1 if improving else 0)
                 )
                 null_score = -self.negamax(
                     board,

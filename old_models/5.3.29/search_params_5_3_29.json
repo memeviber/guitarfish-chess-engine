@@ -1,0 +1,10 @@
+{
+    "rfp_base": 79.2895,
+    "rfp_improving": 19.3438,
+    "nmp_base": 2.9923,
+    "nmp_divisor": 3.9403,
+    "lmr_base": 0.7471,
+    "lmr_divisor": 2.2351,
+    "aspiration_delta": 34.1775,
+    "se_margin_mult": 2.0575
+}

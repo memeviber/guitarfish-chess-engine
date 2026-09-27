@@ -1,6 +1,6 @@
 <img src="logo.jpg" alt="Shovelnose Guitarfish" width="460" height="285"/>
 
-Guitarfish (5.3.29@6.4) is an open-source UCI-compliant chess engine written in Python, featuring a custom 64-bit bitboard move generator accelerated by Numba JIT and an evaluation function powered by an INT8 neural network (Custom NNUE).
+Guitarfish (6.1.45@6.4) is an open-source UCI-compliant chess engine written in Python, featuring a custom 64-bit bitboard move generator accelerated by Numba JIT and an evaluation function powered by an INT8 neural network (Custom NNUE).
 
 ---
 
@@ -54,13 +54,13 @@ The engine is named after the **guitarfish** (*Rhinobatidae*), a real family of 
 
 | Component | Specification |
 | :--- | :--- |
-| **Input Features** | 1,729 sparse geometric features (up to 256 active per position) |
-| **Feature Transformer** | Dual accumulator ($2 \times 1024 \rightarrow 2048$), separate White/Black perspectives |
-| **Hidden Layers** | Linear($2048 \rightarrow 1024$) $\rightarrow$ Linear($1024 \rightarrow 256$) $\rightarrow$ Linear($256 \rightarrow 64$) |
-| **Activation** | SCReLU ($\text{clamp}(x, 0, 1)^2$) |
-| **Output** | Linear($64 \rightarrow 1$) mapped to centipawns via WDL scaling |
-| **Training Dataset** | 17.6M deduplicated, quiet positions |
-| **Loss Function** | Dual Loss: $0.5 \times \text{BCE}(\text{WDL}) + 0.5 \times \text{Huber}(\text{Centipawns})$ |
+| **Input Features** | 1,729 sparse geometric features ($\le 256$ active per position) |
+| **Feature Transformer** | Dual accumulator ($2 \times 1024$), shared perspective weights |
+| **Hidden Layers** | $\text{Linear}(1024 \to 64) \to \text{Dual Expansion}(64 \to 128) \to \text{Linear}(128 \to 32)$ |
+| **Activation** | **Dual Activation** ($\operatorname{clamp}(x) \parallel \operatorname{clamp}(x)^2$) on L1; **SCReLU** on L2 |
+| **Output** | $\text{Linear}(32 \to 1)$ mapped to centipawns via WDL scaling ($S = 410.0$) |
+| **Loss Function** | **Dual Loss:** $0.75 \times \text{BCE}(\text{WDL}) + 0.25 \times \text{Huber}(\text{Centipawns})$ |
+
 
 ### 2. Move Generation Benchmark
 
