@@ -1,6 +1,7 @@
+import json
 import math
+import os
 import time
-
 import numpy as np
 
 import src.bitboard as chess
@@ -19,10 +20,24 @@ PIECE_VALS = np.array([0, 100, 300, 300, 500, 900, 20000], dtype=np.int32)
 MATE_VALUE = 30000
 MAX_PLY = 64
 
-LMR_TABLE = np.zeros((64, 64), dtype=np.int32)
-for d in range(1, 64):
-    for mc in range(1, 64):
-        LMR_TABLE[d, mc] = int(0.75 + math.log(d) * math.log(mc) / 2.25)
+DEFAULT_PARAMS = {
+    "rfp_base": 80.0,
+    "rfp_improving": 20.0,
+    "nmp_base": 3.0,
+    "nmp_divisor": 4.0,
+    "lmr_base": 0.75,
+    "lmr_divisor": 2.25,
+    "aspiration_delta": 35.0,
+    "se_margin_mult": 2.0,
+}
+
+
+def build_lmr_table(base, divisor):
+    table = np.zeros((64, 64), dtype=np.int32)
+    for d in range(1, 64):
+        for mc in range(1, 64):
+            table[d, mc] = int(base + math.log(d) * math.log(mc) / divisor)
+    return table
 
 
 class FastHistory:
@@ -113,10 +128,32 @@ class TranspositionTable:
 
 
 class Searcher:
-    def __init__(self, evaluator, book_path="book.bin"):
+    def __init__(
+        self,
+        evaluator,
+        book_path="book.bin",
+        params=None,
+        params_file="search_params.json",
+        tt_size_mb=256,
+    ):
         self.evaluator = evaluator
         self.book = chess.polyglot.open_reader(book_path)
-        self.tt = TranspositionTable(size_mb=256)
+        self.tt = TranspositionTable(size_mb=tt_size_mb)
+
+        self.params = DEFAULT_PARAMS.copy()
+        if params is not None:
+            self.params.update(params)
+        elif os.path.exists(params_file):
+            try:
+                with open(params_file, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    self.params.update(loaded)
+            except Exception:
+                pass
+
+        self.lmr_table = build_lmr_table(
+            float(self.params["lmr_base"]), float(self.params["lmr_divisor"])
+        )
 
         self.history = FastHistory()
         self.counter_moves = FastCounterMoves()
@@ -313,7 +350,10 @@ class Searcher:
             and abs(beta) < MATE_VALUE - 1000
             and excluded_move is None
         ):
-            rfp_margin = (80 - 20 * int(improving)) * depth
+            rfp_margin = (
+                self.params["rfp_base"]
+                - self.params["rfp_improving"] * int(improving)
+            ) * depth
             if static_eval - rfp_margin >= beta:
                 return static_eval - rfp_margin
 
@@ -328,7 +368,12 @@ class Searcher:
             if board.piece_count() > 5:
                 null_move = chess.Move.null()
                 board.push(null_move)
-                R = 3 + (depth // 4) + (1 if improving else 0)
+                r_div = max(1.0, float(self.params["nmp_divisor"]))
+                R = int(
+                    self.params["nmp_base"]
+                    + (depth // r_div)
+                    + (1 if improving else 0)
+                )
                 null_score = -self.negamax(
                     board,
                     depth - 1 - R,
@@ -356,7 +401,7 @@ class Searcher:
             and tt_flag != 1
             and abs(tt_score) < MATE_VALUE - 1000
         ):
-            singular_margin = 2 * depth
+            singular_margin = self.params["se_margin_mult"] * depth
             singular_beta = tt_score - singular_margin
             singular_depth = (depth - 1) // 2
 
@@ -418,7 +463,7 @@ class Searcher:
                 if depth >= 3 and moves_searched > 1 and not is_cap:
                     d_idx = min(depth, 63)
                     m_idx = min(moves_searched, 63)
-                    r = int(LMR_TABLE[d_idx, m_idx])
+                    r = int(self.lmr_table[d_idx, m_idx])
                     if improving:
                         r -= 1
                     t_idx = 1 if board.turn else 0
@@ -518,13 +563,14 @@ class Searcher:
 
         return pv
 
-    def search(self, board, time_limit=5.0, fixed_depth=None):
+    def search(self, board, time_limit=5.0, fixed_depth=None, silent=False):
         if not fixed_depth or fixed_depth > 1:
             book_move = self.book.probe(board)
             if book_move:
-                print(f"info depth 1 score cp 20 time 1 pv {book_move.uci()}")
-                print(f"bestmove {book_move.uci()}")
-                return
+                if not silent:
+                    print(f"info depth 1 score cp 20 time 1 pv {book_move.uci()}")
+                    print(f"bestmove {book_move.uci()}")
+                return book_move.uci()
 
         self.nodes = 0
         self.start_time = time.time()
@@ -532,13 +578,13 @@ class Searcher:
         self.stop = False
         self.sel_depth = 0
         self.killers.fill(0)
-
         self.history.decay()
 
         legal_moves = board.legal_moves
         if not legal_moves:
-            print("bestmove (none)")
-            return
+            if not silent:
+                print("bestmove (none)")
+            return "(none)"
 
         best_move = legal_moves[0].uci()
         ponder_move = None
@@ -549,7 +595,7 @@ class Searcher:
             self.sel_depth = 0
 
             if depth >= 5 and best_val_prev is not None:
-                delta = 35
+                delta = int(self.params["aspiration_delta"])
                 alpha = max(-MATE_VALUE, best_val_prev - delta)
                 beta = min(MATE_VALUE, best_val_prev + delta)
 
@@ -603,17 +649,21 @@ class Searcher:
                 else f"cp {score}"
             )
 
-            print(
-                f"info depth {depth} seldepth {self.sel_depth} score {score_str} "
-                f"nodes {self.nodes} nps {nps} time {int(elapsed * 1000)} pv {pv_str}"
-            )
+            if not silent:
+                print(
+                    f"info depth {depth} seldepth {self.sel_depth} score {score_str} "
+                    f"nodes {self.nodes} nps {nps} time {int(elapsed * 1000)} pv {pv_str}"
+                )
 
             if not fixed_depth and elapsed > self.time_limit * 0.6:
                 break
 
-        if best_move and ponder_move:
-            print(f"bestmove {best_move} ponder {ponder_move}")
-        elif best_move:
-            print(f"bestmove {best_move}")
-        else:
-            print(f"bestmove {legal_moves[0].uci()}")
+        if not silent:
+            if best_move and ponder_move:
+                print(f"bestmove {best_move} ponder {ponder_move}")
+            elif best_move:
+                print(f"bestmove {best_move}")
+            else:
+                print(f"bestmove {legal_moves[0].uci()}")
+
+        return best_move
