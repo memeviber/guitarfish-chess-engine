@@ -1,11 +1,10 @@
 import io
 import json
 import os
-import sys
 import zipfile
 
-from numba import njit
 import numpy as np
+from numba import njit
 
 from src import bitboard as chess
 

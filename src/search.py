@@ -2,6 +2,7 @@ import json
 import math
 import os
 import time
+
 import numpy as np
 
 import src.bitboard as chess
@@ -293,7 +294,7 @@ class Searcher:
         if ply >= MAX_PLY - 1:
             return self.evaluator.evaluate(board)
 
-        zobrist = chess.polyglot.zobrist_hash(board)
+        zobrist = int(board._hash)
         tt_entry = self.tt.get(zobrist)
         tt_move = None
         tt_move_val = 0
@@ -533,7 +534,7 @@ class Searcher:
         seen = set()
 
         for _ in range(max_length):
-            zobrist = chess.polyglot.zobrist_hash(curr)
+            zobrist = int(curr._hash)
             if zobrist in seen:
                 break
             seen.add(zobrist)

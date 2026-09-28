@@ -57,7 +57,7 @@ The engine is named after the **guitarfish** (*Rhinobatidae*), a real family of 
 | **Input Features** | 1,729 sparse geometric features ($\le 256$ active per position) |
 | **Feature Transformer** | Dual accumulator ($2 \times 1024$), shared perspective weights |
 | **Hidden Layers** | $\text{Linear}(1024 \to 64) \to \text{Dual Expansion}(64 \to 128) \to \text{Linear}(128 \to 32)$ |
-| **Activation** | **Dual Activation** ($\operatorname{clamp}(x) \parallel \operatorname{clamp}(x)^2$) on L1; **SCReLU** on L2 |
+| **Activation** | **Dual Activation** ($\text{clamp}(x) \parallel \text{clamp}(x)^2$) on L1; **SCReLU** on L2 |
 | **Output** | $\text{Linear}(32 \to 1)$ mapped to centipawns via WDL scaling ($S = 410.0$) |
 | **Loss Function** | **Dual Loss:** $0.75 \times \text{BCE}(\text{WDL}) + 0.25 \times \text{Huber}(\text{Centipawns})$ |
 

@@ -99,6 +99,12 @@ _DEBRUIJN_INDEX = np.array(
 )
 # fmt: on
 
+_PIECE_ZOBRIST = np.zeros((12, 64), dtype=np.uint64)
+for pt in range(6):
+    for sq in range(64):
+        _PIECE_ZOBRIST[pt, sq] = POLYGLOT_KEYS[(pt * 2 + 1) * 64 + sq]  # White
+        _PIECE_ZOBRIST[pt + 6, sq] = POLYGLOT_KEYS[(pt * 2) * 64 + sq]  # Black
+
 
 @njit(cache=True, inline="always", fastmath=True)
 def _lsb_index(bitboard):
@@ -931,20 +937,19 @@ def _perft_encoded(pieces, white_to_move, castling, ep_square, depth):
 @njit(cache=True, fastmath=True)
 def _polyglot_hash(pieces, castling_rights, ep_square, turn_white, poly_keys):
     h = np.uint64(0)
-
-    for p_type in range(6):
-        w_bb = pieces[p_type]
+    for pt in range(6):
+        w_bb = pieces[pt]
         while w_bb:
             bit = w_bb & (np.uint64(0) - w_bb)
             sq = _lsb_index(bit)
-            h ^= poly_keys[(p_type * 2 + 1) * 64 + sq]
+            h ^= poly_keys[(pt * 2 + 1) * 64 + sq]
             w_bb ^= bit
 
-        b_bb = pieces[p_type + 6]
+        b_bb = pieces[pt + 6]
         while b_bb:
             bit = b_bb & (np.uint64(0) - b_bb)
             sq = _lsb_index(bit)
-            h ^= poly_keys[(p_type * 2) * 64 + sq]
+            h ^= poly_keys[(pt * 2) * 64 + sq]
             b_bb ^= bit
 
     if castling_rights & 1:
@@ -963,7 +968,7 @@ def _polyglot_hash(pieces, castling_rights, ep_square, turn_white, poly_keys):
         can_ep = False
         if ep_file > 0 and (pawn_mask & (np.uint64(1) << np.uint64(p_row - 1))):
             can_ep = True
-        if ep_file < 7 and (pawn_mask & (np.uint64(1) << np.uint64(p_row + 1))):
+        elif ep_file < 7 and (pawn_mask & (np.uint64(1) << np.uint64(p_row + 1))):
             can_ep = True
         if can_ep:
             h ^= poly_keys[772 + ep_file]
@@ -972,6 +977,23 @@ def _polyglot_hash(pieces, castling_rights, ep_square, turn_white, poly_keys):
         h ^= poly_keys[780]
 
     return int(h)
+
+
+@njit(cache=True, fastmath=True)
+def _get_ep_hash_key(pieces, ep_square, turn_white, poly_keys):
+    if ep_square < 0:
+        return np.uint64(0)
+    ep_file = ep_square & 7
+    pawn_mask = pieces[0 if not turn_white else 6]
+    p_row = ep_square - 8 if turn_white else ep_square + 8
+    can_ep = False
+    if ep_file > 0 and (pawn_mask & (np.uint64(1) << np.uint64(p_row - 1))):
+        can_ep = True
+    elif ep_file < 7 and (pawn_mask & (np.uint64(1) << np.uint64(p_row + 1))):
+        can_ep = True
+    if can_ep:
+        return poly_keys[772 + ep_file]
+    return np.uint64(0)
 
 
 class PolyglotBook:
@@ -983,7 +1005,7 @@ class PolyglotBook:
         if not self.is_loaded or not os.path.exists(self.book_path):
             return None
 
-        key = polyglot.zobrist_hash(board)
+        key = int(board._hash)
         size = os.path.getsize(self.book_path)
         num_entries = size // 16
 
@@ -1051,13 +1073,7 @@ class _PolyglotNamespace:
 
     @staticmethod
     def zobrist_hash(board):
-        return _polyglot_hash(
-            board._pieces,
-            board.castling_rights,
-            board.ep_square,
-            board.turn,
-            POLYGLOT_KEYS,
-        )
+        return int(board._hash)
 
     @staticmethod
     def open_reader(book_path="book.bin"):
@@ -1075,9 +1091,9 @@ class Move:
         self.to_square = to_square
         self.promotion = promotion
         self._value = (
-            value
+            int(value)
             if value is not None
-            else from_square | (to_square << 6) | ((promotion or 0) << 12)
+            else int(from_square | (to_square << 6) | ((promotion or 0) << 12))
         )
 
     @classmethod
@@ -1095,8 +1111,9 @@ class Move:
 
     @classmethod
     def from_value(cls, value):
-        promotion = (value >> 12) & 7
-        return cls(value & 63, (value >> 6) & 63, promotion or None, value)
+        v = int(value)
+        promotion = (v >> 12) & 7
+        return cls(v & 63, (v >> 6) & 63, promotion or None, v)
 
     def uci(self):
         text = chr(97 + (self.from_square & 7)) + chr(49 + self.from_square // 8)
@@ -1109,7 +1126,11 @@ class Move:
         return self._value
 
     def __eq__(self, other):
-        return isinstance(other, Move) and self._value == other._value
+        if isinstance(other, Move):
+            return self._value == other._value
+        elif isinstance(other, int):
+            return self._value == other
+        return False
 
     def __bool__(self):
         return True
@@ -1136,7 +1157,15 @@ class Board:
         self._state_ep = np.full(MAX_HISTORY, -1, dtype=np.int64)
         self._state_halfmove = np.zeros(MAX_HISTORY, dtype=np.int64)
         self._state_fullmove = np.ones(MAX_HISTORY, dtype=np.int64)
+        self._state_hash = np.zeros(MAX_HISTORY, dtype=np.uint64)
         self._state_moves = [None] * MAX_HISTORY
+
+        self._state_moved_pt = np.full(MAX_HISTORY, -1, dtype=np.int8)
+        self._state_captured_pt = np.full(MAX_HISTORY, -1, dtype=np.int8)
+        self._state_from_sq = np.full(MAX_HISTORY, -1, dtype=np.int8)
+        self._state_to_sq = np.full(MAX_HISTORY, -1, dtype=np.int8)
+
+        self._hash = np.uint64(0)
         self._ply = 0
         self._move_stack = []
         self._hash_history = []
@@ -1165,7 +1194,16 @@ class Board:
         self.fullmove_number = 1
         self._ply = 0
         self._move_stack.clear()
-        self._hash_history = [polyglot.zobrist_hash(self)]
+        self._hash = np.uint64(
+            _polyglot_hash(
+                self._pieces,
+                self.castling_rights,
+                self.ep_square,
+                self.turn,
+                POLYGLOT_KEYS,
+            )
+        )
+        self._hash_history = [int(self._hash)]
 
     @property
     def move_stack(self):
@@ -1198,15 +1236,17 @@ class Board:
         )
 
     def see(self, move):
-        return int(see(self._pieces, self.turn, move.from_square, move.to_square))
+        m_val = move._value if isinstance(move, Move) else move
+        return int(see(self._pieces, self.turn, m_val & 63, (m_val >> 6) & 63))
 
     def fast_see(self, move, threshold=0):
+        m_val = move._value if isinstance(move, Move) else move
         return bool(
             fast_see(
                 self._pieces,
                 self.turn,
-                move.from_square,
-                move.to_square,
+                m_val & 63,
+                (m_val >> 6) & 63,
                 threshold,
             )
         )
@@ -1229,144 +1269,237 @@ class Board:
         return [move for move in self.legal_moves if self.is_capture(move)]
 
     def is_capture(self, move):
-        return self.piece_at(move.to_square) is not None or self.is_en_passant(move)
+        m_val = move._value if isinstance(move, Move) else move
+        to_sq = (m_val >> 6) & 63
+        to_bit = np.uint64(1) << np.uint64(to_sq)
+        enemy_offset = 6 if self.turn else 0
+        for pt in range(6):
+            if self._pieces[enemy_offset + pt] & to_bit:
+                return True
+        return to_sq == self.ep_square and (
+            self._pieces[0 if self.turn else 6]
+            & (np.uint64(1) << np.uint64(m_val & 63))
+        )
 
     def is_en_passant(self, move):
-        return (
-            move.to_square == self.ep_square
-            and self.piece_type_at(move.from_square) == PAWN
-            and self.piece_at(move.to_square) is None
+        m_val = move._value if isinstance(move, Move) else move
+        to_sq = (m_val >> 6) & 63
+        from_sq = m_val & 63
+        return to_sq == self.ep_square and (
+            self._pieces[0 if self.turn else 6] & (np.uint64(1) << np.uint64(from_sq))
         )
 
     def is_castling(self, move):
+        m_val = move._value if isinstance(move, Move) else move
+        from_sq = m_val & 63
+        to_sq = (m_val >> 6) & 63
         return (
-            self.piece_type_at(move.from_square) == KING
-            and abs(move.to_square - move.from_square) == 2
-        )
+            self._pieces[5 if self.turn else 11] & (np.uint64(1) << np.uint64(from_sq))
+        ) and abs(to_sq - from_sq) == 2
 
-    def push(self, move):
-        self._state_pieces[self._ply] = self._pieces
-        self._state_turn[self._ply] = self.turn
-        self._state_castling[self._ply] = self.castling_rights
-        self._state_ep[self._ply] = self.ep_square
-        self._state_halfmove[self._ply] = self.halfmove_clock
-        self._state_fullmove[self._ply] = self.fullmove_number
-        self._state_moves[self._ply] = move
+    def push_raw(self, move_val: int):
+        ply = self._ply
+        self._state_pieces[ply] = self._pieces
+        self._state_turn[ply] = self.turn
+        self._state_castling[ply] = self.castling_rights
+        self._state_ep[ply] = self.ep_square
+        self._state_halfmove[ply] = self.halfmove_clock
+        self._state_fullmove[ply] = self.fullmove_number
+        self._state_hash[ply] = self._hash
+        self._state_moves[ply] = move_val
         self._ply += 1
-        self._move_stack.append(move)
 
-        if move == Move.null():
+        if move_val == -1:
+            if self.ep_square >= 0:
+                self._hash ^= _get_ep_hash_key(
+                    self._pieces, self.ep_square, self.turn, POLYGLOT_KEYS
+                )
             self.turn = not self.turn
             self.ep_square = -1
-            self._hash_history.append(polyglot.zobrist_hash(self))
+            self._hash ^= POLYGLOT_KEYS[780]
+            self._hash_history.append(int(self._hash))
             return
 
-        moving = self.piece_at(move.from_square)
-        if moving is None:
-            raise ValueError("move has no piece")
-        is_ep = self.is_en_passant(move)
-        is_castle = self.is_castling(move)
-        source_bit = np.uint64(1) << np.uint64(move.from_square)
-        target_bit = np.uint64(1) << np.uint64(move.to_square)
-        moving_index = (moving.piece_type - 1) + (0 if moving.color else 6)
-        self._pieces[moving_index] &= ~source_bit
-        captured = self.piece_at(move.to_square)
-        if captured:
-            captured_index = (captured.piece_type - 1) + (0 if captured.color else 6)
-            self._pieces[captured_index] &= ~target_bit
-        if is_ep:
-            capture_square = move.to_square - 8 if moving.color else move.to_square + 8
-            self._pieces[(PAWN - 1) + (0 if not moving.color else 6)] &= ~(
-                np.uint64(1) << np.uint64(capture_square)
+        from_sq = move_val & 63
+        to_sq = (move_val >> 6) & 63
+        promo = (move_val >> 12) & 7
+
+        source_bit = np.uint64(1) << np.uint64(from_sq)
+        target_bit = np.uint64(1) << np.uint64(to_sq)
+
+        own_offset = 0 if self.turn else 6
+        enemy_offset = 6 if self.turn else 0
+
+        moving_idx = -1
+        for idx in range(6):
+            if self._pieces[own_offset + idx] & source_bit:
+                moving_idx = own_offset + idx
+                break
+
+        moving_pt = (moving_idx % 6) + 1
+
+        captured_idx = -1
+        for idx in range(6):
+            if self._pieces[enemy_offset + idx] & target_bit:
+                captured_idx = enemy_offset + idx
+                break
+
+        self._state_moved_pt[ply] = moving_idx
+        self._state_captured_pt[ply] = captured_idx
+        self._state_from_sq[ply] = from_sq
+        self._state_to_sq[ply] = to_sq
+
+        self._pieces[moving_idx] &= ~source_bit
+        self._hash ^= _PIECE_ZOBRIST[moving_idx, from_sq]
+
+        if captured_idx >= 0:
+            self._pieces[captured_idx] &= ~target_bit
+            self._hash ^= _PIECE_ZOBRIST[captured_idx, to_sq]
+        elif moving_pt == PAWN and to_sq == self.ep_square:
+            cap_sq = to_sq - 8 if self.turn else to_sq + 8
+            ep_pawn_idx = enemy_offset  # Tốt địch
+            self._pieces[ep_pawn_idx] &= ~(np.uint64(1) << np.uint64(cap_sq))
+            self._hash ^= _PIECE_ZOBRIST[ep_pawn_idx, cap_sq]
+            self._state_captured_pt[ply] = ep_pawn_idx
+
+        placed_idx = (own_offset + promo - 1) if promo else moving_idx
+        self._pieces[placed_idx] |= target_bit
+        self._hash ^= _PIECE_ZOBRIST[placed_idx, to_sq]
+
+        if moving_pt == KING and abs(to_sq - from_sq) == 2:
+            rank_offset = 0 if self.turn else 56
+            rook_from, rook_to = (H1, F1) if to_sq > from_sq else (A1, D1)
+            rook_idx = own_offset + ROOK - 1
+            r_from_bit = np.uint64(1) << np.uint64(rook_from + rank_offset)
+            r_to_bit = np.uint64(1) << np.uint64(rook_to + rank_offset)
+            self._pieces[rook_idx] &= ~r_from_bit
+            self._pieces[rook_idx] |= r_to_bit
+            self._hash ^= _PIECE_ZOBRIST[rook_idx, rook_from + rank_offset]
+            self._hash ^= _PIECE_ZOBRIST[rook_idx, rook_to + rank_offset]
+
+        old_castling = self.castling_rights
+        new_castling = old_castling
+
+        if moving_pt == KING:
+            new_castling &= ~(3 if self.turn else 12)
+        elif moving_pt == ROOK:
+            if from_sq == A1:
+                new_castling &= ~2
+            elif from_sq == H1:
+                new_castling &= ~1
+            elif from_sq == A8:
+                new_castling &= ~8
+            elif from_sq == H8:
+                new_castling &= ~4
+
+        if captured_idx == 3 + enemy_offset:
+            if to_sq == A1:
+                new_castling &= ~2
+            elif to_sq == H1:
+                new_castling &= ~1
+            elif to_sq == A8:
+                new_castling &= ~8
+            elif to_sq == H8:
+                new_castling &= ~4
+
+        if old_castling != new_castling:
+            c_diff = old_castling ^ new_castling
+            if c_diff & 1:
+                self._hash ^= POLYGLOT_KEYS[768]
+            if c_diff & 2:
+                self._hash ^= POLYGLOT_KEYS[769]
+            if c_diff & 4:
+                self._hash ^= POLYGLOT_KEYS[770]
+            if c_diff & 8:
+                self._hash ^= POLYGLOT_KEYS[771]
+            self.castling_rights = new_castling
+
+        if self.ep_square >= 0:
+            self._hash ^= _get_ep_hash_key(
+                self._state_pieces[ply], self.ep_square, self.turn, POLYGLOT_KEYS
             )
-        placed_type = move.promotion or moving.piece_type
-        placed_index = (placed_type - 1) + (0 if moving.color else 6)
-        self._pieces[placed_index] |= target_bit
-        if is_castle:
-            rook_from, rook_to = (
-                (H1, F1)
-                if move.to_square == G1
-                else (A1, D1)
-                if move.to_square == C1
-                else (H8, F8)
-                if move.to_square == G8
-                else (A8, D8)
-            )
-            rook_index = (ROOK - 1) + (0 if moving.color else 6)
-            self._pieces[rook_index] &= ~(np.uint64(1) << np.uint64(rook_from))
-            self._pieces[rook_index] |= np.uint64(1) << np.uint64(rook_to)
-        if moving.piece_type == KING:
-            self.castling_rights &= ~(3 if moving.color else 12)
-        if moving.piece_type == ROOK:
-            self.castling_rights &= ~(
-                2
-                if move.from_square == A1
-                else 1
-                if move.from_square == H1
-                else 8
-                if move.from_square == A8
-                else 4
-                if move.from_square == H8
-                else 0
-            )
-        if captured and captured.piece_type == ROOK:
-            self.castling_rights &= ~(
-                2
-                if move.to_square == A1
-                else 1
-                if move.to_square == H1
-                else 8
-                if move.to_square == A8
-                else 4
-                if move.to_square == H8
-                else 0
-            )
-        self.ep_square = (
-            (move.from_square + move.to_square) // 2
-            if moving.piece_type == PAWN
-            and abs(move.to_square - move.from_square) == 16
+
+        next_ep = (
+            (from_sq + to_sq) // 2
+            if moving_pt == PAWN and abs(to_sq - from_sq) == 16
             else -1
         )
+        self.ep_square = next_ep
+        if next_ep >= 0:
+            self._hash ^= _get_ep_hash_key(
+                self._pieces, next_ep, not self.turn, POLYGLOT_KEYS
+            )
+
         self.halfmove_clock = (
-            0 if moving.piece_type == PAWN or captured else self.halfmove_clock + 1
+            0 if moving_pt == PAWN or captured_idx >= 0 else self.halfmove_clock + 1
         )
-        if not moving.color:
+        if not self.turn:
             self.fullmove_number += 1
+
         self.turn = not self.turn
-        self._hash_history.append(polyglot.zobrist_hash(self))
+        self._hash ^= POLYGLOT_KEYS[780]
+        self._hash_history.append(int(self._hash))
+
+    def push(self, move):
+        if isinstance(move, int):
+            m_val = move
+            self.push_raw(m_val)
+            self._move_stack.append(Move.from_value(m_val))
+        else:
+            m_val = move._value
+            self.push_raw(m_val)
+            self._move_stack.append(move)
 
     def pop(self):
         self._ply -= 1
-        move = self._state_moves[self._ply]
-        self._pieces[:] = self._state_pieces[self._ply]
-        self.turn = bool(self._state_turn[self._ply])
-        self.castling_rights = int(self._state_castling[self._ply])
-        self.ep_square = int(self._state_ep[self._ply])
-        self.halfmove_clock = int(self._state_halfmove[self._ply])
-        self.fullmove_number = int(self._state_fullmove[self._ply])
-        self._move_stack.pop()
+        ply = self._ply
+        move_val = self._state_moves[ply]
+
+        self._pieces[:] = self._state_pieces[ply]
+        self.turn = bool(self._state_turn[ply])
+        self.castling_rights = int(self._state_castling[ply])
+        self.ep_square = int(self._state_ep[ply])
+        self.halfmove_clock = int(self._state_halfmove[ply])
+        self.fullmove_number = int(self._state_fullmove[ply])
+        self._hash = self._state_hash[ply]
+
+        if self._move_stack:
+            self._move_stack.pop()
         self._hash_history.pop()
-        return move
+
+        return (
+            Move.from_value(move_val)
+            if isinstance(move_val, (int, np.integer))
+            else move_val
+        )
 
     def is_legal(self, move):
         return move in self.legal_moves
 
     def is_repetition(self, count):
         current = self._hash_history[-1]
-        return self._hash_history.count(current) >= count
+        c = 0
+        for h in self._hash_history:
+            if h == current:
+                c += 1
+                if c >= count:
+                    return True
+        return False
 
     def can_claim_fifty_moves(self):
         return self.halfmove_clock >= 100
 
     def copy(self):
         result = Board()
-        result._pieces = self._pieces.copy()
+        result._pieces[:] = self._pieces
         result.turn = self.turn
         result.castling_rights = self.castling_rights
         result.ep_square = self.ep_square
         result.halfmove_clock = self.halfmove_clock
         result.fullmove_number = self.fullmove_number
+        result._hash = self._hash
         result._hash_history = self._hash_history.copy()
+        result._ply = 0
         return result
 
     def set_fen(self, fen):
@@ -1414,7 +1547,16 @@ class Board:
         self.fullmove_number = int(fields[5])
         self._ply = 0
         self._move_stack.clear()
-        self._hash_history = [polyglot.zobrist_hash(self)]
+        self._hash = np.uint64(
+            _polyglot_hash(
+                self._pieces,
+                self.castling_rights,
+                self.ep_square,
+                self.turn,
+                POLYGLOT_KEYS,
+            )
+        )
+        self._hash_history = [int(self._hash)]
 
     def perft(self, depth):
         return int(

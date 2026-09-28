@@ -1,10 +1,10 @@
 {
-    "rfp_base": 80.6972,
-    "rfp_improving": 20.0286,
-    "nmp_base": 2.9922,
-    "nmp_divisor": 3.8276,
-    "lmr_base": 0.7496,
-    "lmr_divisor": 2.2751,
-    "aspiration_delta": 34.1742,
-    "se_margin_mult": 2.2925
+    "rfp_base": 79.4317,
+    "rfp_improving": 18.8961,
+    "nmp_base": 2.9651,
+    "nmp_divisor": 3.6541,
+    "lmr_base": 0.778,
+    "lmr_divisor": 2.3144,
+    "aspiration_delta": 33.1681,
+    "se_margin_mult": 2.0887
 }
