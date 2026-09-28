@@ -12,7 +12,7 @@ from src import bitboard as chess
 DEFAULT_WDL_SCALE = 410.0
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def accumulate_features(out_acc, ft_w, ft_b, indices, count):
     for j in range(ft_b.shape[0]):
         out_acc[j] = ft_b[j]

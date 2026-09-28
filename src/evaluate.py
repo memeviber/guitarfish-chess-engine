@@ -11,7 +11,7 @@ from src import bitboard as chess
 DEFAULT_WDL_SCALE = 410.0
 
 
-@njit(fastmath=True, cache=True)
+@njit(fastmath=True)
 def accumulate_features(out_acc, ft_w, ft_b, indices, count):
     for j in range(1024):
         out_acc[j] = ft_b[j]
@@ -21,7 +21,7 @@ def accumulate_features(out_acc, ft_w, ft_b, indices, count):
             out_acc[j] += ft_w[idx, j]
 
 
-@njit(fastmath=True, cache=True)
+@njit(fastmath=True)
 def forward(acc_stm, acc_opp, w_fc1, b_fc1, w_fc2, b_fc2, w_out, b_out):
     pooled = np.empty(1024, dtype=np.float32)
 

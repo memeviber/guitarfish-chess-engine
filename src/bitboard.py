@@ -106,20 +106,20 @@ for pt in range(6):
         _PIECE_ZOBRIST[pt + 6, sq] = POLYGLOT_KEYS[(pt * 2) * 64 + sq]  # Black
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(inline="always", fastmath=True)
 def _lsb_index(bitboard):
     index = (bitboard * _DEBRUIJN) >> np.uint64(58)
     return _DEBRUIJN_INDEX[index]
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(inline="always", fastmath=True)
 def _pop_lsb(bitboard):
     bit = bitboard & (np.uint64(0) - bitboard)
     square = _lsb_index(bit)
     return bit, square
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(inline="always", fastmath=True)
 def _ray_attacks(square, occupied, dr, df):
     rank = square // 8
     file = square & 7
@@ -136,7 +136,7 @@ def _ray_attacks(square, occupied, dr, df):
     return attacks
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(inline="always", fastmath=True)
 def _bishop_attacks(square, occupied):
     attacks = np.uint64(0)
     for dr, df in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
@@ -144,7 +144,7 @@ def _bishop_attacks(square, occupied):
     return attacks
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(inline="always", fastmath=True)
 def _rook_attacks(square, occupied):
     attacks = np.uint64(0)
     for dr, df in ((1, 0), (-1, 0), (0, 1), (0, -1)):
@@ -152,12 +152,12 @@ def _rook_attacks(square, occupied):
     return attacks
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(inline="always", fastmath=True)
 def _queen_attacks(square, occupied):
     return _bishop_attacks(square, occupied) | _rook_attacks(square, occupied)
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def get_color_attacks(pieces, is_white):
     offset = 0 if is_white else 6
     occupied = np.uint64(0)
@@ -207,7 +207,7 @@ def get_color_attacks(pieces, is_white):
     return attacks
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def extract_indices(pieces, turn_white, out_stm, out_opp):
     w_count = 0
     b_count = 0
@@ -429,7 +429,7 @@ def extract_indices(pieces, turn_white, out_stm, out_opp):
         return b_count, w_count
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def is_attacked(square, by_white, pieces):
     occupied = np.uint64(0)
     for i in range(12):
@@ -469,7 +469,7 @@ def is_attacked(square, by_white, pieces):
     return False
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def _generate_pseudo_into(pieces, white_to_move, castling, ep_square, moves):
     count = 0
     own_start = 0 if white_to_move else 6
@@ -598,7 +598,7 @@ def _generate_pseudo_into(pieces, white_to_move, castling, ep_square, moves):
     return moves, count
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def is_legal_encoded(pieces, white_to_move, ep_square, value):
     test_pieces = np.empty(12, dtype=np.uint64)
     for i in range(12):
@@ -656,7 +656,7 @@ def is_legal_encoded(pieces, white_to_move, ep_square, value):
     return not is_attacked(king_square, not white_to_move, test_pieces)
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def _generate_legal_into(pieces, white_to_move, castling, ep_square, pseudo, legal):
     pseudo, pseudo_count = _generate_pseudo_into(
         pieces, white_to_move, castling, ep_square, pseudo
@@ -686,7 +686,7 @@ def _generate_legal_into(pieces, white_to_move, castling, ep_square, pseudo, leg
 _SEE_PIECE_VALUES = np.array([100, 300, 300, 500, 900, 20000], dtype=np.int64)
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def see(pieces, white_to_move, from_sq, to_sq):
     target_bit = np.uint64(1) << np.uint64(to_sq)
     from_bit = np.uint64(1) << np.uint64(from_sq)
@@ -793,12 +793,12 @@ def see(pieces, white_to_move, from_sq, to_sq):
     return gain[0]
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def fast_see(pieces, white_to_move, from_sq, to_sq, threshold=0):
     return see(pieces, white_to_move, from_sq, to_sq) >= threshold
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def _apply_encoded(pieces, white_to_move, castling, ep_square, value):
     source = value & 63
     target = (value >> 6) & 63
@@ -934,7 +934,7 @@ def _perft_encoded(pieces, white_to_move, castling, ep_square, depth):
     )
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def _polyglot_hash(pieces, castling_rights, ep_square, turn_white, poly_keys):
     h = np.uint64(0)
     for pt in range(6):
@@ -979,7 +979,7 @@ def _polyglot_hash(pieces, castling_rights, ep_square, turn_white, poly_keys):
     return int(h)
 
 
-@njit(cache=True, fastmath=True)
+@njit(fastmath=True)
 def _get_ep_hash_key(pieces, ep_square, turn_white, poly_keys):
     if ep_square < 0:
         return np.uint64(0)

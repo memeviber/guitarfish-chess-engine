@@ -183,7 +183,7 @@
 [White "Guitarfish-V6.1.45"]
 [Black "Guitarfish-V5.3.29"]
 [Result "1/2-1/2"]
-[Opening "Startpos (Cổ điển)"]
+[Opening "Startpos"]
 [FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"]
 
 1. d2d4 d7d5 2. g1f3 g8f6 3. c2c4 e7e6 4. b1c3 f8e7 5. c1g5 e8g8 6. c4d5 f6d5 7. g5e7 d8e7 8. d1c2 d5c3 9. c2c3 b7b6 10. a1c1 c7c5 11. d4c5 c8b7 12. c5b6 b8d7 13. c3e3 a7b6 14. a2a3 f8c8 15. h2h4 e7f6 16. c1b1 d7c5 17. f3d2 c8d8 18. h1h3 a8c8 19. e3g5 f6d4 20. h4h5 h7h6 21. g5e3 d4f6 22. g2g3 f6f5 23. b1d1 f5c2 24. h3h4 c5a4 25. h4a4 c2a4 26. e3b6 b7d5 27. f2f3 d5a8 28. d1a1 a4c2 29. b6b4 c2c7 30. b4f4 c7a5 31. b2b4 a5d5 32. d2e4 d5d4 33. a1b1 a8e4 34. f3e4 c8c3 35. b4b5 e6e5 36. f4g4 d4g1 37. g4h4 d8d4 38. b5b6 c3c8 39. b6b7 c8b8 40. h4g4 d4c4 41. g4f3 c4c7 42. f3f2 g1f2 43. e1f2 b8b7 44. b1d1 b7b3 45. f1h3 g8f8 46. h3f5 c7c3 47. a3a4 c3g3 48. a4a5 b3a3 49. d1d8 f8e7 50. d8d7 e7e8 51. d7c7 g3c3 52. c7a7 a3a2 53. f5g4 c3a3 54. a7a8 e8e7 55. a5a6 a3a6 56. a8c8 e7f6 57. f2g3 f6g5 58. g4f3 a6a7 59. c8e8 f7f6 60. e8g8 a2a6 61. g8f8 a6b6 62. f8d8 b6b1 63. d8c8 a7a1 64. g3f2 b1f1 65. f2e3 g5h4 66. c8d8 a1b1 67. d8a8 b1b6 68. a8a3 b6b4 69. e3d2 b4b1 70. d2e3 f1g1 71. e3f2 b1d1 72. a3a7 d1c1 73. f2e3 c1f1 74. e3d3 f1b1 75. d3c4 b1d1 76. c4c5 d1f1 77. c5c6 f1b1 78. c6c5 b1d1 79. c5c6 d1d2 80. c6b5 d2c2 1/2-1/2
@@ -193,7 +193,7 @@
 [White "Guitarfish-V5.3.29"]
 [Black "Guitarfish-V6.1.45"]
 [Result "1/2-1/2"]
-[Opening "Startpos (Cổ điển)"]
+[Opening "Startpos"]
 [FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"]
 
 1. e2e4 c7c5 2. g1f3 b8c6 3. f1b5 e7e6 4. b5c6 b7c6 5. d2d3 g8e7 6. e4e5 e7g6 7. b1d2 f7f6 8. d2c4 d8c7 9. c1d2 f6e5 10. d2a5 c7b8 11. h2h4 c8a6 12. h4h5 g6f4 13. g2g3 a6c4 14. d3c4 e5e4 15. f3h4 g7g5 16. h5g6 h7g6 17. g3f4 b8f4 18. d1e2 h8h4 19. h1h4 f4h4 20. e1c1 a8c8 21. d1g1 e8f7 22. a5c3 f8g7 23. c3g7 f7g7 24. e2e3 d7d6 25. f2f3 e4f3 26. e3f3 e6e5 27. f3g2 h4f6 28. a2a3 a7a6 29. g1f1 f6e6 30. g2f3 e5e4 31. f3c3 e6e5 32. c3e5 d6e5 33. c1d2 c8b8 34. b2b3 b8f8 35. f1g1 f8f3 36. d2e2 g7f6 37. g1h1 f6f5 38. h1h7 g6g5 39. h7g7 f5f4 40. g7f7 f4g3 41. f7e7 g5g4 42. e7e6 g3h2 43. e6c6 g4g3 44. c6h6 h2g2 45. h6h5 f3c3 46. e2d2 g2f2 47. d2c3 g3g2 48. h5f5 f2e2 49. f5g5 e2f2 50. g5f5 f2e2 51. f5g5 e2f2 52. g5f5 1/2-1/2
