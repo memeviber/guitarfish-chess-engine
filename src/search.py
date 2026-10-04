@@ -233,7 +233,9 @@ class Searcher:
 
     def quiescence(self, board, alpha, beta, ply=0):
         self.nodes += 1
-        if (self.nodes & 1023) == 0 and (time.perf_counter() - self.start_time) >= self.hard_time_limit:
+        if (self.nodes & 1023) == 0 and (
+            time.perf_counter() - self.start_time
+        ) >= self.hard_time_limit:
             self.stop = True
         if self.stop:
             return 0
@@ -305,7 +307,9 @@ class Searcher:
         if ply > 0 and (board.is_repetition(2) or board.can_claim_fifty_moves()):
             return 0
 
-        if (self.nodes & 1023) == 0 and (time.perf_counter() - self.start_time) >= self.hard_time_limit:
+        if (self.nodes & 1023) == 0 and (
+            time.perf_counter() - self.start_time
+        ) >= self.hard_time_limit:
             self.stop = True
         if self.stop:
             return 0
@@ -617,13 +621,16 @@ class Searcher:
             ep_str = chr(97 + (board.ep_square & 7)) + str(1 + board.ep_square // 8)
         return f"{'/'.join(rank_strs)} {turn_str} {c_str} {ep_str} {board.halfmove_clock} {board.fullmove_number}"
 
-    def search(self, board, time_limit=5.0, fixed_depth=None, silent=False):
-        if not fixed_depth or fixed_depth > 1:
+    def search(
+        self, board, time_limit=5.0, fixed_depth=None, silent=False, shut_up=False
+    ):
+        if not fixed_depth or fixed_depth > 1 and not shut_up:
             book_move = self.book.probe(board)
             if book_move:
                 if not silent:
                     print(f"info depth 1 score cp 20 time 1 pv {book_move.uci()}")
                     print(f"bestmove {book_move.uci()}")
+
                 return book_move.uci()
 
         self.nodes = 0
@@ -641,6 +648,8 @@ class Searcher:
 
         legal_moves = board.legal_moves
         if not legal_moves:
+            if shut_up:
+                return
             if not silent:
                 print("bestmove (none)")
             return "(none)"
@@ -654,11 +663,15 @@ class Searcher:
                 cat = tb["category"].upper()
                 dt_info = f"DTM:{tb['dtm']}" if tb["dtm"] else f"DTZ:{tb['dtz']}"
 
+                if shut_up:
+                    return
+
                 if not silent:
                     print(
                         f"info depth 100 score {score_str} pv {best_m} ({cat} in {dt_info})"
                     )
                     print(f"bestmove {best_m}")
+
                 return best_m
 
         best_move = legal_moves[0].uci()
@@ -693,7 +706,9 @@ class Searcher:
 
                         delta += delta // 2
                         if delta > 1000:
-                            score = self.negamax(board, depth, -MATE_VALUE, MATE_VALUE, 0)
+                            score = self.negamax(
+                                board, depth, -MATE_VALUE, MATE_VALUE, 0
+                            )
                             break
                 else:
                     score = self.negamax(board, depth, -MATE_VALUE, MATE_VALUE, 0)
@@ -729,6 +744,9 @@ class Searcher:
                     else f"cp {score}"
                 )
 
+                if shut_up:
+                    continue
+
                 if not silent:
                     print(
                         f"info depth {depth} seldepth {self.sel_depth} score {score_str} "
@@ -744,6 +762,9 @@ class Searcher:
         finally:
             if gc_was_enabled:
                 gc.enable()
+
+        if shut_up:
+            return
 
         if not silent:
             if best_move and ponder_move:

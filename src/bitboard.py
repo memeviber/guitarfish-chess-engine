@@ -1050,6 +1050,17 @@ class PolyglotBook:
                         else None
                     )
 
+                    pt = board.piece_type_at(from_sq)
+                    if pt == KING:
+                        if from_sq == E1 and to_sq == H1:
+                            to_sq = G1
+                        elif from_sq == E1 and to_sq == A1:
+                            to_sq = C1
+                        elif from_sq == E8 and to_sq == H8:
+                            to_sq = G8
+                        elif from_sq == E8 and to_sq == A8:
+                            to_sq = C8
+
                     move = Move(from_sq, to_sq, promo)
                     if board.is_legal(move):
                         matching_moves.append(move)
