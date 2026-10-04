@@ -149,7 +149,7 @@ class Searcher:
 
         self.history = FastHistory()
         self.counter_moves = FastCounterMoves()
-        self.killers = np.zeros((MAX_PLY, 2), dtype=np.int64)
+        self.killers = np.zeros((MAX_PLY * 2, 2), dtype=np.int64)
 
         self.eval_stack = [0] * MAX_PLY
         self.nodes = 0
@@ -175,8 +175,8 @@ class Searcher:
     def score_moves_fast(self, board, moves, depth, tt_move_val, prev_move, mailbox):
         t_idx = 1 if board.turn else 0
         hist_t = self.history.table[t_idx]
-        k0 = self.killers[depth, 0]
-        k1 = self.killers[depth, 1]
+        k0 = self.killers[depth, 0] if depth < self.killers.shape[0] else 0
+        k1 = self.killers[depth, 1] if depth < self.killers.shape[0] else 0
         cm_val = self.counter_moves.get_move(prev_move)
         ep_sq = board.ep_square
         pieces = board._pieces
@@ -496,7 +496,7 @@ class Searcher:
                 alpha = score
 
             if alpha >= beta:
-                if not is_cap:
+                if not is_cap and depth < self.killers.shape[0]:
                     m_val = move._value
                     if m_val != self.killers[depth, 0]:
                         self.killers[depth, 1] = self.killers[depth, 0]
@@ -563,7 +563,7 @@ class Searcher:
 
         self.nodes = 0
         self.start_time = time.time()
-        self.time_limit = time_limit
+        self.time_limit = time_limit if time_limit is not None else 1e9
         self.stop = False
         self.sel_depth = 0
         self.killers.fill(0)
@@ -644,7 +644,7 @@ class Searcher:
                     f"nodes {self.nodes} nps {nps} time {int(elapsed * 1000)} pv {pv_str}"
                 )
 
-            if not fixed_depth and elapsed > self.time_limit * 0.6:
+            if not fixed_depth and self.time_limit < 1e8 and elapsed > self.time_limit * 0.6:
                 break
 
         if not silent:

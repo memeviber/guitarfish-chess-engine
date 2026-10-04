@@ -963,7 +963,7 @@ def _polyglot_hash(pieces, castling_rights, ep_square, turn_white, poly_keys):
 
     if ep_square >= 0:
         ep_file = ep_square & 7
-        pawn_mask = pieces[0 if not turn_white else 6]
+        pawn_mask = pieces[0 if turn_white else 6]
         p_row = ep_square - 8 if turn_white else ep_square + 8
         can_ep = False
         if ep_file > 0 and (pawn_mask & (np.uint64(1) << np.uint64(p_row - 1))):
@@ -984,7 +984,7 @@ def _get_ep_hash_key(pieces, ep_square, turn_white, poly_keys):
     if ep_square < 0:
         return np.uint64(0)
     ep_file = ep_square & 7
-    pawn_mask = pieces[0 if not turn_white else 6]
+    pawn_mask = pieces[0 if turn_white else 6]
     p_row = ep_square - 8 if turn_white else ep_square + 8
     can_ep = False
     if ep_file > 0 and (pawn_mask & (np.uint64(1) << np.uint64(p_row - 1))):
