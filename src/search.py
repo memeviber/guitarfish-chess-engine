@@ -233,7 +233,7 @@ class Searcher:
 
     def quiescence(self, board, alpha, beta, ply=0):
         self.nodes += 1
-        if (self.nodes & 1023) == 0 and (time.time() - self.start_time) >= self.hard_time_limit:
+        if (self.nodes & 1023) == 0 and (time.perf_counter() - self.start_time) >= self.hard_time_limit:
             self.stop = True
         if self.stop:
             return 0
@@ -305,7 +305,7 @@ class Searcher:
         if ply > 0 and (board.is_repetition(2) or board.can_claim_fifty_moves()):
             return 0
 
-        if (self.nodes & 1023) == 0 and (time.time() - self.start_time) >= self.hard_time_limit:
+        if (self.nodes & 1023) == 0 and (time.perf_counter() - self.start_time) >= self.hard_time_limit:
             self.stop = True
         if self.stop:
             return 0
@@ -627,7 +627,7 @@ class Searcher:
                 return book_move.uci()
 
         self.nodes = 0
-        self.start_time = time.time()
+        self.start_time = time.perf_counter()
 
         raw_limit = time_limit if time_limit is not None else 1e9
         safety_buffer = min(0.15, raw_limit * 0.08) if raw_limit < 60.0 else 0.0
@@ -721,7 +721,7 @@ class Searcher:
                 else:
                     pv_str = best_move
 
-                elapsed = max(time.time() - self.start_time, 1e-6)
+                elapsed = max(time.perf_counter() - self.start_time, 1e-6)
                 nps = int(self.nodes / elapsed)
                 score_str = (
                     f"mate {(MATE_VALUE - abs(score) + 1) // 2 if score > 0 else -((MATE_VALUE - abs(score) + 1) // 2)}"
