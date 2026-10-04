@@ -1,3 +1,4 @@
+import gc
 import json
 import math
 import os
@@ -6,6 +7,7 @@ import time
 import numpy as np
 
 import src.bitboard as chess
+from src.tablebase import OnlineTablebase
 
 PIECE_VALS = np.array([0, 100, 300, 300, 500, 900, 20000], dtype=np.int32)
 
@@ -86,13 +88,20 @@ class TranspositionTable:
 
         idx = zobrist & self.mask
         entry = self.table[idx]
-        if entry is None or depth >= entry[1] or flag == 0:
-            stored_move = move if move is not None else (entry[4] if entry else None)
-            self.table[idx] = (zobrist, depth, flag, score, stored_move)
+
+        if entry is None:
+            self.table[idx] = [zobrist, depth, flag, score, move]
+        elif depth >= entry[1] or flag == 0:
+            stored_move = move if move is not None else entry[4]
+            entry[0] = zobrist
+            entry[1] = depth
+            entry[2] = flag
+            entry[3] = score
+            entry[4] = stored_move
 
     def probe(self, zobrist, depth, alpha, beta, ply):
         entry = self.table[zobrist & self.mask]
-        if entry and entry[0] == zobrist:
+        if entry is not None and entry[0] == zobrist:
             _, e_depth, flag, score, move = entry
             if score > MATE_VALUE - 1000:
                 score -= ply
@@ -111,7 +120,7 @@ class TranspositionTable:
 
     def get(self, zobrist):
         entry = self.table[zobrist & self.mask]
-        if entry and entry[0] == zobrist:
+        if entry is not None and entry[0] == zobrist:
             return entry
         return None
 
@@ -154,23 +163,32 @@ class Searcher:
         self.eval_stack = [0] * MAX_PLY
         self.nodes = 0
         self.start_time = 0.0
-        self.time_limit = 0.0
+        self.hard_time_limit = 0.0
+        self.soft_time_limit = 0.0
         self.stop = False
         self.sel_depth = 0
         self.expected_opponent_move = None
         self.premove_reply = None
-        self.pv_lines = [[] for _ in range(MAX_PLY)]
 
-    def _build_mailbox(self, pieces):
-        mailbox = [0] * 64
+        self.pv_table = [[None] * MAX_PLY for _ in range(MAX_PLY)]
+        self.pv_length = [0] * MAX_PLY
+
+        self._mailbox = [0] * 64
+
+        self.tablebase = OnlineTablebase(timeout=1.2)
+
+    def _update_mailbox(self, pieces):
+        mb = self._mailbox
+        for sq in range(64):
+            mb[sq] = 0
         for idx in range(12):
             bb = int(pieces[idx])
             p_val = (idx % 6) + 1
             while bb:
                 sq = (bb & -bb).bit_length() - 1
-                mailbox[sq] = p_val
+                mb[sq] = p_val
                 bb &= bb - 1
-        return mailbox
+        return mb
 
     def score_moves_fast(self, board, moves, depth, tt_move_val, prev_move, mailbox):
         t_idx = 1 if board.turn else 0
@@ -211,11 +229,11 @@ class Searcher:
                 scored.append((int(hist_t[from_sq, to_sq]), move))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [x[1] for x in scored]
+        return scored
 
     def quiescence(self, board, alpha, beta, ply=0):
         self.nodes += 1
-        if (self.nodes & 2047) == 0 and time.time() - self.start_time > self.time_limit:
+        if (self.nodes & 1023) == 0 and (time.time() - self.start_time) >= self.hard_time_limit:
             self.stop = True
         if self.stop:
             return 0
@@ -236,7 +254,7 @@ class Searcher:
         if not captures:
             return alpha
 
-        mailbox = self._build_mailbox(board._pieces)
+        mailbox = self._update_mailbox(board._pieces)
         pieces = board._pieces
 
         scored_captures = []
@@ -282,11 +300,12 @@ class Searcher:
     ):
         self.nodes += 1
         if ply < MAX_PLY:
-            self.pv_lines[ply] = []
+            self.pv_length[ply] = ply
+
         if ply > 0 and (board.is_repetition(2) or board.can_claim_fifty_moves()):
             return 0
 
-        if (self.nodes & 2047) == 0 and time.time() - self.start_time > self.time_limit:
+        if (self.nodes & 1023) == 0 and (time.time() - self.start_time) >= self.hard_time_limit:
             self.stop = True
         if self.stop:
             return 0
@@ -414,7 +433,7 @@ class Searcher:
                 return alpha
             return -MATE_VALUE + ply if in_check else 0
 
-        mailbox = self._build_mailbox(board._pieces)
+        mailbox = self._update_mailbox(board._pieces)
         sorted_moves = self.score_moves_fast(
             board, legal_moves, depth, tt_move_val, prev_move, mailbox
         )
@@ -425,7 +444,7 @@ class Searcher:
         alpha_orig = alpha
         quiets_searched = []
 
-        for move in sorted_moves:
+        for _, move in sorted_moves:
             if excluded_move is not None and move == excluded_move:
                 continue
 
@@ -490,7 +509,11 @@ class Searcher:
                 best_score = score
                 best_move_found = move
                 if ply < MAX_PLY - 1:
-                    self.pv_lines[ply] = [move] + self.pv_lines[ply + 1]
+                    self.pv_table[ply][ply] = move
+                    nxt_len = self.pv_length[ply + 1]
+                    for j in range(ply + 1, nxt_len):
+                        self.pv_table[ply][j] = self.pv_table[ply + 1][j]
+                    self.pv_length[ply] = max(ply + 1, nxt_len)
 
             if score > alpha:
                 alpha = score
@@ -552,6 +575,48 @@ class Searcher:
 
         return pv
 
+    def _get_fen_from_board(self, board):
+        rank_strs = []
+        syms = {
+            1: ("P", "p"),
+            2: ("N", "n"),
+            3: ("B", "b"),
+            4: ("R", "r"),
+            5: ("Q", "q"),
+            6: ("K", "k"),
+        }
+        for r in range(7, -1, -1):
+            empty, r_str = 0, ""
+            for f in range(8):
+                sq = r * 8 + f
+                pt = board.piece_at(sq)
+                if pt is None:
+                    empty += 1
+                else:
+                    if empty > 0:
+                        r_str += str(empty)
+                        empty = 0
+                    r_str += syms[pt.piece_type][0 if pt.color else 1]
+            if empty > 0:
+                r_str += str(empty)
+            rank_strs.append(r_str)
+        turn_str = "w" if board.turn == chess.WHITE else "b"
+        c_str = ""
+        if board.castling_rights & 1:
+            c_str += "K"
+        if board.castling_rights & 2:
+            c_str += "Q"
+        if board.castling_rights & 4:
+            c_str += "k"
+        if board.castling_rights & 8:
+            c_str += "q"
+        if not c_str:
+            c_str = "-"
+        ep_str = "-"
+        if board.ep_square >= 0:
+            ep_str = chr(97 + (board.ep_square & 7)) + str(1 + board.ep_square // 8)
+        return f"{'/'.join(rank_strs)} {turn_str} {c_str} {ep_str} {board.halfmove_clock} {board.fullmove_number}"
+
     def search(self, board, time_limit=5.0, fixed_depth=None, silent=False):
         if not fixed_depth or fixed_depth > 1:
             book_move = self.book.probe(board)
@@ -563,7 +628,12 @@ class Searcher:
 
         self.nodes = 0
         self.start_time = time.time()
-        self.time_limit = time_limit if time_limit is not None else 1e9
+
+        raw_limit = time_limit if time_limit is not None else 1e9
+        safety_buffer = min(0.15, raw_limit * 0.08) if raw_limit < 60.0 else 0.0
+        self.hard_time_limit = max(0.05, raw_limit - safety_buffer)
+        self.soft_time_limit = self.hard_time_limit * 0.45
+
         self.stop = False
         self.sel_depth = 0
         self.killers.fill(0)
@@ -575,77 +645,105 @@ class Searcher:
                 print("bestmove (none)")
             return "(none)"
 
+        if board.piece_count() <= 7 and self.hard_time_limit > 1.5:
+            fen_str = self._get_fen_from_board(board)
+            tb = self.tablebase.probe(fen_str)
+            if tb and tb["best_move"]:
+                best_m = tb["best_move"]
+                score_str = f"cp {tb['score_cp']}"
+                cat = tb["category"].upper()
+                dt_info = f"DTM:{tb['dtm']}" if tb["dtm"] else f"DTZ:{tb['dtz']}"
+
+                if not silent:
+                    print(
+                        f"info depth 100 score {score_str} pv {best_m} ({cat} in {dt_info})"
+                    )
+                    print(f"bestmove {best_m}")
+                return best_m
+
         best_move = legal_moves[0].uci()
         ponder_move = None
         best_val_prev = None
         max_depth = fixed_depth if fixed_depth else 64
 
-        for depth in range(1, max_depth + 1):
-            self.sel_depth = 0
+        gc_was_enabled = gc.isenabled()
+        if gc_was_enabled:
+            gc.disable()
 
-            if depth >= 5 and best_val_prev is not None:
-                delta = int(self.params["aspiration_delta"])
-                alpha = max(-MATE_VALUE, best_val_prev - delta)
-                beta = min(MATE_VALUE, best_val_prev + delta)
+        try:
+            for depth in range(1, max_depth + 1):
+                self.sel_depth = 0
 
-                while True:
-                    score = self.negamax(board, depth, alpha, beta, 0)
-                    if self.stop:
-                        break
+                if depth >= 5 and best_val_prev is not None:
+                    delta = int(self.params["aspiration_delta"])
+                    alpha = max(-MATE_VALUE, best_val_prev - delta)
+                    beta = min(MATE_VALUE, best_val_prev + delta)
 
-                    if score <= alpha:
-                        alpha = max(-MATE_VALUE, alpha - delta)
-                    elif score >= beta:
-                        beta = min(MATE_VALUE, beta + delta)
-                    else:
-                        break
+                    while True:
+                        score = self.negamax(board, depth, alpha, beta, 0)
+                        if self.stop:
+                            break
 
-                    delta += delta // 2
-                    if delta > 1000:
-                        score = self.negamax(board, depth, -MATE_VALUE, MATE_VALUE, 0)
-                        break
-            else:
-                score = self.negamax(board, depth, -MATE_VALUE, MATE_VALUE, 0)
+                        if score <= alpha:
+                            alpha = max(-MATE_VALUE, alpha - delta)
+                        elif score >= beta:
+                            beta = min(MATE_VALUE, beta + delta)
+                        else:
+                            break
 
-            if self.stop:
-                break
-
-            best_val_prev = score
-
-            pv_list = self.get_pv_from_tt(board)
-            if not pv_list and self.pv_lines[0]:
-                pv_list = self.pv_lines[0]
-
-            if pv_list:
-                pv_str = " ".join(m.uci() for m in pv_list)
-                best_move = pv_list[0].uci()
-                ponder_move = pv_list[1].uci() if len(pv_list) > 1 else None
-
-                if len(pv_list) > 2:
-                    self.expected_opponent_move = ponder_move
-                    self.premove_reply = pv_list[2].uci()
+                        delta += delta // 2
+                        if delta > 1000:
+                            score = self.negamax(board, depth, -MATE_VALUE, MATE_VALUE, 0)
+                            break
                 else:
-                    self.expected_opponent_move = None
-                    self.premove_reply = None
-            else:
-                pv_str = best_move
+                    score = self.negamax(board, depth, -MATE_VALUE, MATE_VALUE, 0)
 
-            elapsed = max(time.time() - self.start_time, 1e-6)
-            nps = int(self.nodes / elapsed)
-            score_str = (
-                f"mate {(MATE_VALUE - abs(score) + 1) // 2 if score > 0 else -((MATE_VALUE - abs(score) + 1) // 2)}"
-                if abs(score) > MATE_VALUE - 1000
-                else f"cp {score}"
-            )
+                if self.stop:
+                    break
 
-            if not silent:
-                print(
-                    f"info depth {depth} seldepth {self.sel_depth} score {score_str} "
-                    f"nodes {self.nodes} nps {nps} time {int(elapsed * 1000)} pv {pv_str}"
+                best_val_prev = score
+
+                pv_list = self.get_pv_from_tt(board)
+                if not pv_list and self.pv_length[0] > 0:
+                    pv_list = [self.pv_table[0][i] for i in range(self.pv_length[0])]
+
+                if pv_list:
+                    pv_str = " ".join(m.uci() for m in pv_list)
+                    best_move = pv_list[0].uci()
+                    ponder_move = pv_list[1].uci() if len(pv_list) > 1 else None
+
+                    if len(pv_list) > 2:
+                        self.expected_opponent_move = ponder_move
+                        self.premove_reply = pv_list[2].uci()
+                    else:
+                        self.expected_opponent_move = None
+                        self.premove_reply = None
+                else:
+                    pv_str = best_move
+
+                elapsed = max(time.time() - self.start_time, 1e-6)
+                nps = int(self.nodes / elapsed)
+                score_str = (
+                    f"mate {(MATE_VALUE - abs(score) + 1) // 2 if score > 0 else -((MATE_VALUE - abs(score) + 1) // 2)}"
+                    if abs(score) > MATE_VALUE - 1000
+                    else f"cp {score}"
                 )
 
-            if not fixed_depth and self.time_limit < 1e8 and elapsed > self.time_limit * 0.6:
-                break
+                if not silent:
+                    print(
+                        f"info depth {depth} seldepth {self.sel_depth} score {score_str} "
+                        f"nodes {self.nodes} nps {nps} time {int(elapsed * 1000)} pv {pv_str}"
+                    )
+
+                if (
+                    not fixed_depth
+                    and self.hard_time_limit < 1e8
+                    and elapsed >= self.soft_time_limit
+                ):
+                    break
+        finally:
+            if gc_was_enabled:
+                gc.enable()
 
         if not silent:
             if best_move and ponder_move:

@@ -1,6 +1,6 @@
 <img src="logo.jpg" alt="Shovelnose Guitarfish" width="460" height="285"/>
 
-Guitarfish (6.1.45@6.4) is an open-source UCI-compliant chess engine written in Python, featuring a custom 64-bit bitboard move generator accelerated by Numba JIT and an evaluation function powered by an INT8 neural network (Custom NNUE).
+Guitarfish (6.1.45@6.4) is an open-source UCI-compliant chess engine written in Python, featuring a custom 64-bit bitboard move generator accelerated by Numba JIT and an evaluation function powered by a neural network (Custom NNUE).
 
 ---
 
@@ -8,8 +8,8 @@ Guitarfish (6.1.45@6.4) is an open-source UCI-compliant chess engine written in 
 
 Guitarfish runs live as an official bot on Lichess: [@guitarfish-engine](https://lichess.org/@/guitarfish-engine).
 
-- **Rapid Rating:** ~2000 ELO
-- **Blitz Rating:** ~1800 ELO
+- **Rapid Rating:** ~2100 ELO
+- **Blitz Rating:** ~1900 ELO
 - **Challenge Policy:** Currently configured to accept **Blitz** and **Rapid** challenges only.
 
 > **Note:** The engine is self-hosted on a local machine. If the bot is offline or not responding, the server is likely turned off while the author is away at school =)))
@@ -44,7 +44,7 @@ The engine is named after the **guitarfish** (*Rhinobatidae*), a real family of 
   - Losing captures demoted below quiet moves
 - **Transposition Table:** 64-bit PolyGlot Zobrist hashing with mate-distance ply adjustments.
 - **Opening Book:** Native PolyGlot (`.bin`) binary search support.
-- **Model Packaging:** Single `.gm` archive containing model weights, ONNX runtime graph, and metadata loaded directly from memory.
+- **Model Packaging:** Single `.gm` archive containing model weights, and metadata loaded directly from memory.
 
 ---
 
