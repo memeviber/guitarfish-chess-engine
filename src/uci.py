@@ -49,13 +49,16 @@ def handle_position(board, parts):
 
 def warmup(searcher):
     print("info string Warming up Numba JIT...", flush=True)
-    dummy_board = chess.Board()
-    searcher.search(dummy_board, fixed_depth=4, shut_up=True)
-    searcher.search(dummy_board, fixed_depth=4, shut_up=True)
-    searcher.tt.clear()
-    searcher.history.clear()
-    searcher.counter_moves.clear()
-    print("info string Numba JIT warmup complete!", flush=True)
+    try:
+        dummy_board = chess.Board()
+        searcher.search(dummy_board, fixed_depth=4, shut_up=True)
+        searcher.search(dummy_board, fixed_depth=4, shut_up=True)
+        searcher.tt.clear()
+        searcher.history.clear()
+        searcher.counter_moves.clear()
+        print("info string Numba JIT warmup complete!", flush=True)
+    except Exception as e:
+        print(f"info string Warmup failed: {e}", flush=True)
 
 
 def uci_loop(model_path="guitarfish.gm", book_path="book.bin"):
