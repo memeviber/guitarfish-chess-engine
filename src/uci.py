@@ -117,7 +117,7 @@ def uci_loop(model_path="guitarfish.gm", book_path="book.bin"):
                     continue
 
             if "depth" in args:
-                searcher.search(board, fixed_depth=args["depth"])
+                searcher.search(board, fixed_depth=args["depth"], time_limit=99999999.0)
             elif "movetime" in args:
                 searcher.search(board, time_limit=args["movetime"] / 1000.0)
             else:
