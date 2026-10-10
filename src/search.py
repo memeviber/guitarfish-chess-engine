@@ -173,12 +173,12 @@ class Searcher:
         self.pv_table = [[None] * MAX_PLY for _ in range(MAX_PLY)]
         self.pv_length = [0] * MAX_PLY
 
-        self._mailbox = [0] * 64
+        self._mailbox = [[0] * 64 for _ in range(MAX_PLY * 2)]
 
         self.tablebase = OnlineTablebase(timeout=1.2)
 
-    def _update_mailbox(self, pieces):
-        mb = self._mailbox
+    def _update_mailbox(self, pieces, ply):
+        mb = self._mailbox[min(ply, MAX_PLY * 2 - 1)]
         for sq in range(64):
             mb[sq] = 0
         for idx in range(12):
@@ -256,7 +256,7 @@ class Searcher:
         if not captures:
             return alpha
 
-        mailbox = self._update_mailbox(board._pieces)
+        mailbox = self._update_mailbox(board._pieces, ply)
         pieces = board._pieces
 
         scored_captures = []
@@ -437,7 +437,7 @@ class Searcher:
                 return alpha
             return -MATE_VALUE + ply if in_check else 0
 
-        mailbox = self._update_mailbox(board._pieces)
+        mailbox = self._update_mailbox(board._pieces, ply)
         sorted_moves = self.score_moves_fast(
             board, legal_moves, depth, tt_move_val, prev_move, mailbox
         )
