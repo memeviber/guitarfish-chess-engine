@@ -27,6 +27,10 @@ DEFAULT_PARAMS = {
     "lmp_base": 4.0,
     "lmp_depth_factor": 1.0,
     "child_futility_margin": 90.0,
+    "multicut_depth": 6.0,
+    "multicut_m": 8.0,
+    "multicut_c": 3.0,
+    "multicut_r": 3.0,
 }
 
 
@@ -491,6 +495,49 @@ class Searcher:
                     return beta
 
         if (
+            allow_nmp
+            and ply > 0
+            and not in_check
+            and depth >= int(self.params["multicut_depth"])
+            and abs(beta) < MATE_VALUE - 1000
+            and excluded_move is None
+        ):
+            mc_r = int(self.params["multicut_r"])
+            mc_depth = depth - 1 - mc_r
+            if mc_depth > 0:
+                mc_mailbox = self._update_mailbox(board._pieces, ply)
+                mc_legal_moves = board.legal_moves
+                if mc_legal_moves:
+                    mc_sorted = self.score_moves_fast(
+                        board, mc_legal_moves, depth, tt_move_val, prev_move, mc_mailbox
+                    )
+                    mc_moves_to_test = int(self.params["multicut_m"])
+                    mc_threshold = int(self.params["multicut_c"])
+                    mc_cuts = 0
+
+                    for _, mc_move in mc_sorted[:mc_moves_to_test]:
+                        board.push(mc_move)
+                        mc_score = -self.negamax(
+                            board,
+                            mc_depth,
+                            -beta,
+                            -beta + 1,
+                            ply + 1,
+                            False,
+                            mc_move,
+                            None,
+                        )
+                        board.pop(return_move=False)
+
+                        if self.stop:
+                            return 0
+
+                        if mc_score >= beta:
+                            mc_cuts += 1
+                            if mc_cuts >= mc_threshold:
+                                return beta
+
+        if (
             ply > 0
             and not in_check
             and depth >= 4
@@ -559,6 +606,7 @@ class Searcher:
             board, legal_moves, depth, tt_move_val, prev_move, mailbox
         )
 
+        cm_val = self.counter_moves.get_move(prev_move)
         best_score = -MATE_VALUE
         best_move_found = None
         moves_searched = 0
@@ -569,6 +617,7 @@ class Searcher:
             if excluded_move is not None and move == excluded_move:
                 continue
 
+            m_val = move._value
             is_cap = (mailbox[move.to_square] != 0) or (
                 move.to_square == board.ep_square
             )
@@ -655,18 +704,53 @@ class Searcher:
                 )
             else:
                 r = 0
-                if depth >= 3 and moves_searched > 1 and not is_cap:
+                if depth >= 3 and moves_searched > 1:
                     d_idx = min(depth, 63)
                     m_idx = min(moves_searched, 63)
-                    r = int(self.lmr_table[d_idx, m_idx])
-                    if improving:
-                        r -= 1
-                    t_idx = 1 if board.turn else 0
-                    if (
-                        self.history.table[t_idx, move.from_square, move.to_square]
-                        > 5000
-                    ):
-                        r -= 1
+
+                    if not is_cap:
+                        r = int(self.lmr_table[d_idx, m_idx])
+
+                        if gives_check:
+                            r -= 1
+                        if move.promotion is not None:
+                            r -= 1
+                        if depth < self.killers.shape[0]:
+                            if (
+                                m_val == self.killers[depth, 0]
+                                or m_val == self.killers[depth, 1]
+                            ):
+                                r -= 1
+                        if cm_val is not None and m_val == cm_val:
+                            r -= 1
+
+                        t_idx = 1 if board.turn else 0
+                        hist_val = int(
+                            self.history.table[t_idx, move.from_square, move.to_square]
+                        )
+                        if hist_val > 8000:
+                            r -= 2
+                        elif hist_val > 2000:
+                            r -= 1
+                        elif hist_val < -4000:
+                            r += 1
+                        elif hist_val < -10000:
+                            r += 2
+
+                        if improving:
+                            r -= 1
+                        else:
+                            r += 1
+
+                        if (
+                            not in_check
+                            and static_eval - self.params["rfp_base"] * depth >= beta
+                        ):
+                            r += 1
+                    else:
+                        if depth >= 5 and moves_searched > 6 and not gives_check:
+                            r = 1
+
                     r = max(0, min(r, new_depth - 1))
 
                 score = -self.negamax(
