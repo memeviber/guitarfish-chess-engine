@@ -66,7 +66,7 @@ def handle_position(board, parts, chess):
 
 
 def warmup(searcher, chess):
-    print("info string Warming up Numba JIT...", flush=True)
+    print("Warming up Numba JIT...", file=sys.stderr, flush=True)
     start = time.perf_counter()
     try:
         dummy_board = chess.Board()
@@ -77,10 +77,12 @@ def warmup(searcher, chess):
         searcher.counter_moves.clear()
         elapsed = (time.perf_counter() - start) * 1000
         print(
-            f"info string Numba JIT warmup complete in {int(elapsed)} ms!", flush=True
+            f"Numba JIT warmup complete in {int(elapsed)} ms!",
+            file=sys.stderr,
+            flush=True,
         )
     except Exception as e:
-        print(f"info string Warmup failed: {e}", flush=True)
+        print(f"Numba JIT warmup failed: {e}", file=sys.stderr, flush=True)
 
 
 def uci_loop(model_path="guitarfish.gm", book_path="", tt_size_mb=256):
