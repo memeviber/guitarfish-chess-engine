@@ -21,7 +21,7 @@ for sq in range(64):
     SQUARE_TO_BUCKET[sq] = r_group * 2 + f_group
 
 
-@njit(fastmath=True)
+@njit(cache = True, fastmath=True)
 def transform_features(raw_indices, count, sq_to_bucket, out_indices):
     k_bucket = 0
     for i in range(count):
@@ -39,7 +39,7 @@ def transform_features(raw_indices, count, sq_to_bucket, out_indices):
             out_indices[i] = 6144 + f - 768
 
 
-@njit(fastmath=True)
+@njit(cache = True, fastmath=True)
 def accumulate_features(out_acc, ft_w, ft_b, indices, count):
     for j in range(1024):
         out_acc[j] = ft_b[j]
@@ -49,7 +49,7 @@ def accumulate_features(out_acc, ft_w, ft_b, indices, count):
             out_acc[j] += ft_w[idx, j]
 
 
-@njit(fastmath=True)
+@njit(cache = True, fastmath=True)
 def update_accumulator(out_acc, ft_w, old_indices, old_count, new_indices, new_count):
     old_i = 0
     new_i = 0
@@ -81,7 +81,7 @@ def update_accumulator(out_acc, ft_w, old_indices, old_count, new_indices, new_c
         new_i += 1
 
 
-@njit(fastmath=True)
+@njit(cache = True, fastmath=True)
 def forward(acc_stm, acc_opp, w_fc1, b_fc1, w_fc2, b_fc2, w_out, b_out):
     pooled = np.empty(1024, dtype=np.float32)
 

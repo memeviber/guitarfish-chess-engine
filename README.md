@@ -120,6 +120,14 @@ python guitarfish.py guitarfish.gm book.bin 256
 
 The TT size can also be changed at runtime with the UCI option `Hash` (1-1024 MiB). If the evaluation file is missing, startup reports an error.
 
+To build a standalone Windows executable with the default model bundled (and no opening book), run:
+
+```powershell
+python -m PyInstaller --clean --noconfirm --onefile --name Guitarfish --add-data "guitarfish.gm:." guitarfish.py
+```
+
+The executable is created at `dist/Guitarfish.exe`. It uses the bundled model by default; passing an evaluation-file path as the first argument overrides it.
+
 Standard UCI commands example:
 
 ```text

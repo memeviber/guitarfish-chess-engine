@@ -16,7 +16,13 @@ if __name__ == "__main__":
         )
         sys.exit(2)
 
-    model_file = sys.argv[1] if len(sys.argv) > 1 else "guitarfish.gm"
+    bundle_dir = getattr(sys, "_MEIPASS", None)
+    default_model = (
+        os.path.join(bundle_dir, "guitarfish.gm")
+        if bundle_dir
+        else "guitarfish.gm"
+    )
+    model_file = sys.argv[1] if len(sys.argv) > 1 else default_model
     book_file = sys.argv[2] if len(sys.argv) > 2 else ""
     try:
         hash_size_mb = int(sys.argv[3]) if len(sys.argv) > 3 else 256
