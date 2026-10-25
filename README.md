@@ -28,6 +28,7 @@ The engine is named after the **guitarfish** (*Rhinobatidae*), a real family of 
 - **Evaluation:** King-bucketed NNUE with 7,105 input feature IDs, dual 1,024-value accumulators, product pooling, and a single centipawn output head.
 - **Search Algorithm:** Negamax with Principal Variation Search (PVS) and Alpha-Beta pruning.
 - **Draw Handling:** Search respects claimable threefold repetition and the 50-move rule while continuing to search for a win instead of treating an optional draw claim as mandatory.
+- **Search Safety:** Null-move pruning is disabled in minor-piece-only endings and near the 50-move limit; quiescence detects stalemate at its depth cap and en-passant captures are classified only for actual pawn captures.
 - **Pruning & Reductions:**
   - Singular Extensions (SE)
   - Null Move Pruning (NMP)
@@ -139,6 +140,12 @@ go depth 10
 ```
 
 The engine outputs standard UCI search information (`depth`, `seldepth`, `score`, `nodes`, `nps`, `pv`) and terminates with `bestmove`.
+
+Run the search regression suite with:
+
+```bash
+python -m unittest discover -s tests
+```
 
 ---
 

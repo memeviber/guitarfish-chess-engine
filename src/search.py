@@ -186,6 +186,19 @@ class Searcher:
         halfmove_clock = min(board.halfmove_clock, 100)
         return int(board._hash) ^ ((halfmove_clock * TT_HALF_MOVE_KEY) & UINT64_MASK)
 
+    @staticmethod
+    def _can_null_move(board):
+        side_offset = 0 if board.turn else 6
+        has_major_piece = bool(
+            int(board._pieces[side_offset + 3])
+            | int(board._pieces[side_offset + 4])
+        )
+        return (
+            board.piece_count() > 6
+            and has_major_piece
+            and board.halfmove_clock < 90
+        )
+
     def set_hash_size(self, size_mb):
         self.tt = TranspositionTable(size_mb=size_mb)
         self.tt_size_mb = size_mb
@@ -248,7 +261,8 @@ class Searcher:
             to_sq = move.to_square
             victim = mailbox[to_sq]
 
-            if victim != 0 or to_sq == ep_sq:
+            is_en_passant = to_sq == ep_sq and mailbox[from_sq] == 1
+            if victim != 0 or is_en_passant:
                 attacker = mailbox[from_sq] or 1
                 v_type = victim if victim != 0 else 1
                 mvv_lva = PIECE_VALS[v_type] * 10 - PIECE_VALS[attacker]
@@ -306,6 +320,10 @@ class Searcher:
                     best_score = max(best_score, score)
                 return max(best_score, 0) if draw_claim else best_score
         else:
+            moves, has_legal_move = board.generate_legal_noisy_moves()
+            if not has_legal_move:
+                return 0
+
             stand_pat = self.evaluator.evaluate(board)
             if draw_claim:
                 stand_pat = max(stand_pat, 0)
@@ -317,9 +335,8 @@ class Searcher:
             if ply >= MAX_PLY - 1 or ply >= 32:
                 return stand_pat
 
-            moves, has_legal_move = board.generate_legal_noisy_moves()
             if not moves:
-                return 0 if not has_legal_move else alpha
+                return alpha
 
         if ply >= 32:
             best_score = -MATE_VALUE
@@ -414,8 +431,7 @@ class Searcher:
             return 0
 
         if ply >= MAX_PLY - 1:
-            score = self.evaluator.evaluate(board)
-            return max(score, 0) if draw_claim else score
+            return self.quiescence(board, alpha, beta, ply)
 
         zobrist = self._tt_key(board)
         tt_entry = self.tt.get(zobrist)
@@ -495,7 +511,7 @@ class Searcher:
             and excluded_move is None
             and not draw_claim
         ):
-            if board.piece_count() > 5:
+            if self._can_null_move(board):
                 null_move = chess.Move.null()
                 board.push(null_move)
                 r_div = max(1.0, float(self.params["nmp_divisor"]))
@@ -646,8 +662,8 @@ class Searcher:
                 continue
 
             m_val = move._value
-            is_cap = (mailbox[move.to_square] != 0) or (
-                move.to_square == board.ep_square
+            is_cap = mailbox[move.to_square] != 0 or (
+                move.to_square == board.ep_square and mailbox[move.from_square] == 1
             )
             see_pruning_candidate = (
                 excluded_move is None
