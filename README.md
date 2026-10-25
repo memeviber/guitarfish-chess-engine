@@ -27,6 +27,7 @@ The engine is named after the **guitarfish** (*Rhinobatidae*), a real family of 
 - **Engine Core:** Custom 64-bit bitboard implementation compiled to native machine code using Numba JIT.
 - **Evaluation:** King-bucketed NNUE with 7,105 input feature IDs, dual 1,024-value accumulators, product pooling, and a single centipawn output head.
 - **Search Algorithm:** Negamax with Principal Variation Search (PVS) and Alpha-Beta pruning.
+- **Draw Handling:** Search respects claimable threefold repetition and the 50-move rule while continuing to search for a win instead of treating an optional draw claim as mandatory.
 - **Pruning & Reductions:**
   - Singular Extensions (SE)
   - Null Move Pruning (NMP)
