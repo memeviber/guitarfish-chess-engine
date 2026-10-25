@@ -34,7 +34,7 @@ class SearchRegressionTests(unittest.TestCase):
         self.assertEqual(self.searcher.search(board, fixed_depth=3, silent=True), "f7g7")
 
     def test_captures_hanging_queen(self):
-        board = engine_chess.Board("4k3/8/8/3q4/4Q3/8/8/4K3 w - - 0 1")
+        board = engine_chess.Board("k7/8/8/3q4/4Q3/8/8/7K w - - 0 1")
 
         self.assertEqual(self.searcher.search(board, fixed_depth=3, silent=True), "e4d5")
 
@@ -117,6 +117,7 @@ class SearchRegressionTests(unittest.TestCase):
             with self.subTest(fen=fen):
                 engine_board = engine_chess.Board(fen)
                 reference_board = reference_chess.Board(fen)
+                self.assertTrue(reference_board.is_valid())
                 engine_moves = {move.uci() for move in engine_board.legal_moves}
                 reference_moves = {move.uci() for move in reference_board.legal_moves}
                 self.assertEqual(engine_moves, reference_moves)
