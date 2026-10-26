@@ -66,12 +66,20 @@ The engine is named after the **guitarfish** (*Rhinobatidae*), a real family of 
 | **Hidden Layers** | $\text{Linear}(1024 \to 64) \to [c, c^2] \ (64 \to 128) \to \text{Linear}(128 \to 32)$ |
 | **Activation** | **Dual activation** ($c \parallel c^2$) after FC1; **SCReLU** ($\text{clamp}(x,0,1)^2$) after FC2 |
 | **Output** | Single head, $\text{Linear}(32 \to 1)$, scaled to centipawns by $410.0$ |
-| **Training Loss** | $0.80 \times \text{BCE} (\text{WDL}) + 0.20 \times \text{Huber} (\text{normalized CP}, \delta=0.25)$ |
+| **Training Loss** | Soft-target BCE (WDL), with target probability $\sigma(\text{CP} / 410)$ |
 
 The 8-way king bucket is selected independently for each perspective from that side's king square. The training dataset can use the original 1,729-feature binary data and applies the bucket offset while loading samples.
 
+### 2. Training Data and Configuration
 
-### 2. Move Generation Benchmark
+The training pipeline downloads the first three Parquet shards from the [Lichess position-evaluations dataset](https://huggingface.co/datasets/Lichess/chess-position-evaluations). It keeps positions with a centipawn score, no mate score, search depth of at least 24, and an absolute score no greater than 1,200 cp. Duplicate FENs are removed, and scores are converted to the side-to-move perspective.
+
+Features are extracted with the engine's bitboard module and stored as memory-mapped binary files. The first 50,000 positions are held out for validation; the rest are used for training. The configured run uses 16 epochs, a batch size of 8,192, AdamW, cosine learning-rate decay, automatic mixed precision on CUDA, and gradient clipping. Stochastic Weight Averaging starts at epoch 9.
+
+In the supplied training run, filtering produced 21,205,317 positions. The best reported SWA checkpoint reached a validation loss of 0.67267 and a mean absolute error of 79.7 cp at epoch 11. These are training-run results, not a playing-strength guarantee.
+
+
+### 3. Move Generation Benchmark
 
 Perft test on the standard starting position:
 
