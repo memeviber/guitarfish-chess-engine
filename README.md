@@ -16,12 +16,6 @@ Guitarfish runs live as an official bot on Lichess: [@guitarfish-engine](https:/
 
 ---
 
-## About the Name
-
-The engine is named after the **guitarfish** (*Rhinobatidae*), a real family of rays characterized by a flattened body and an elongated snout resembling an acoustic guitar.
-
----
-
 ## Features
 
 - **Engine Core:** Custom 64-bit bitboard implementation compiled to native machine code using Numba JIT.
@@ -174,6 +168,12 @@ engine:
   protocol: "uci"
   ponder: false
 ```
+
+---
+
+## About the Name
+
+The engine is named after the **guitarfish** (*Rhinobatidae*), a real family of rays characterized by a flattened body and an elongated snout resembling an acoustic guitar.
 
 ---
 
