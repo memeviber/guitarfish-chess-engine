@@ -52,17 +52,15 @@ class FastCounterMoves:
     def clear(self):
         self.table.fill(0)
 
-    def get_move(self, prev_move):
-        if prev_move is None:
-            return None
-        idx = (prev_move.from_square) | (prev_move.to_square << 6)
-        val = self.table[idx]
-        return val if val != 0 else None
+    def get_move(self, prev_move: int):
+        if prev_move <= 0:
+            return 0
+        val = self.table[prev_move & 4095]
+        return val if val != 0 else 0
 
-    def store(self, prev_move, move):
-        if prev_move is not None:
-            idx = (prev_move.from_square) | (prev_move.to_square << 6)
-            self.table[idx] = move._value
+    def store(self, prev_move: int, move_val: int):
+        if prev_move > 0:
+            self.table[prev_move & 4095] = move_val
 
 
 class FastCorrectionHistory:
@@ -107,7 +105,7 @@ class TranspositionTable:
         self.mask = self.size - 1
         self.table = [None] * self.size
 
-    def store(self, zobrist, depth, flag, score, move, ply):
+    def store(self, zobrist, depth, flag, score, move_val, ply):
         if score > MATE_VALUE - 1000:
             score += ply
         elif score < -MATE_VALUE + 1000:
@@ -117,9 +115,9 @@ class TranspositionTable:
         entry = self.table[idx]
 
         if entry is None:
-            self.table[idx] = [zobrist, depth, flag, score, move]
+            self.table[idx] = [zobrist, depth, flag, score, move_val]
         elif depth >= entry[1] or flag == 0:
-            stored_move = move if move is not None else entry[4]
+            stored_move = move_val if move_val > 0 else entry[4]
             entry[0] = zobrist
             entry[1] = depth
             entry[2] = flag
@@ -129,7 +127,7 @@ class TranspositionTable:
     def probe(self, zobrist, depth, alpha, beta, ply):
         entry = self.table[zobrist & self.mask]
         if entry is not None and entry[0] == zobrist:
-            _, e_depth, flag, score, move = entry
+            _, e_depth, flag, score, move_val = entry
             if score > MATE_VALUE - 1000:
                 score -= ply
             elif score < -MATE_VALUE + 1000:
@@ -142,8 +140,8 @@ class TranspositionTable:
                     return alpha
                 if flag == 2 and score >= beta:
                     return beta
-            return move
-        return None
+            return move_val
+        return 0
 
     def get(self, zobrist):
         entry = self.table[zobrist & self.mask]
@@ -181,10 +179,10 @@ class Searcher:
         self.soft_time_limit = 0.0
         self.stop = False
         self.sel_depth = 0
-        self.expected_opponent_move = None
-        self.premove_reply = None
+        self.expected_opponent_move = 0
+        self.premove_reply = 0
 
-        self.pv_table = [[None] * MAX_PLY for _ in range(MAX_PLY)]
+        self.pv_table = np.zeros((MAX_PLY, MAX_PLY), dtype=np.int64)
         self.pv_length = [0] * MAX_PLY
 
         self._mailbox = [[0] * 64 for _ in range(MAX_PLY * 2)]
@@ -265,14 +263,13 @@ class Searcher:
         pieces = board._pieces
 
         scored = []
-        for move in moves:
-            m_val = move._value
-            if m_val == tt_move_val:
-                scored.append((2_000_000, move))
+        for m in moves:
+            if m == tt_move_val:
+                scored.append((2_000_000, m))
                 continue
 
-            from_sq = move.from_square
-            to_sq = move.to_square
+            from_sq = m & 63
+            to_sq = (m >> 6) & 63
             victim = mailbox[to_sq]
 
             is_en_passant = to_sq == ep_sq and mailbox[from_sq] == 1
@@ -282,17 +279,17 @@ class Searcher:
                 mvv_lva = PIECE_VALS[v_type] * 10 - PIECE_VALS[attacker]
 
                 if chess.fast_see(pieces, board.turn, from_sq, to_sq, 0):
-                    scored.append((1_000_000 + mvv_lva, move))
+                    scored.append((1_000_000 + mvv_lva, m))
                 else:
-                    scored.append((-100_000 + mvv_lva, move))
-            elif m_val == k0:
-                scored.append((900_000, move))
-            elif m_val == k1:
-                scored.append((800_000, move))
-            elif cm_val is not None and m_val == cm_val:
-                scored.append((750_000, move))
+                    scored.append((-100_000 + mvv_lva, m))
+            elif m == k0:
+                scored.append((900_000, m))
+            elif m == k1:
+                scored.append((800_000, m))
+            elif cm_val != 0 and m == cm_val:
+                scored.append((750_000, m))
             else:
-                scored.append((int(hist_t[from_sq, to_sq]), move))
+                scored.append((int(hist_t[from_sq, to_sq]), m))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return scored
@@ -315,7 +312,7 @@ class Searcher:
         in_check = board.is_check()
         if in_check:
             moves = board.legal_moves
-            if not moves:
+            if len(moves) == 0:
                 return -MATE_VALUE + ply
             if draw_claim:
                 alpha = max(alpha, 0)
@@ -323,10 +320,10 @@ class Searcher:
                     return 0
             if ply >= MAX_PLY - 1:
                 best_score = -MATE_VALUE
-                for move in moves:
-                    board.push(move)
+                for m in moves:
+                    board.push(m)
                     child_moves = board.legal_moves
-                    if not child_moves:
+                    if len(child_moves) == 0:
                         score = MATE_VALUE - (ply + 1) if board.is_check() else 0
                     else:
                         score = -(self.evaluator.evaluate(board) + self.corr_hist.get(board))
@@ -351,15 +348,15 @@ class Searcher:
             if ply >= MAX_PLY - 1 or ply >= 32:
                 return stand_pat
 
-            if not moves:
+            if len(moves) == 0:
                 return alpha
 
         if ply >= 32:
             best_score = -MATE_VALUE
-            for move in moves:
-                board.push(move)
+            for m in moves:
+                board.push(m)
                 child_moves = board.legal_moves
-                if not child_moves:
+                if len(child_moves) == 0:
                     score = MATE_VALUE - (ply + 1) if board.is_check() else 0
                 else:
                     score = -(self.evaluator.evaluate(board) + self.corr_hist.get(board))
@@ -371,21 +368,21 @@ class Searcher:
         pieces = board._pieces
 
         scored_captures = []
-        for move in moves:
-            is_capture = mailbox[move.to_square] != 0 or (
-                move.to_square == board.ep_square and mailbox[move.from_square] == 1
+        for m in moves:
+            from_sq = m & 63
+            to_sq = (m >> 6) & 63
+            promo = (m >> 12) & 7
+
+            is_capture = mailbox[to_sq] != 0 or (
+                to_sq == board.ep_square and mailbox[from_sq] == 1
             )
-            victim = mailbox[move.to_square] or (1 if is_capture else 0)
-            attacker = mailbox[move.from_square] or 1
+            victim = mailbox[to_sq] or (1 if is_capture else 0)
+            attacker = mailbox[from_sq] or 1
             mvv_lva = PIECE_VALS[victim] * 10 - PIECE_VALS[attacker]
-            promotion_gain = (
-                PIECE_VALS[move.promotion] - PIECE_VALS[1]
-                if move.promotion is not None
-                else 0
-            )
+            promotion_gain = PIECE_VALS[promo] - PIECE_VALS[1] if promo else 0
             capture_gain = (PIECE_VALS[victim] if is_capture else 0) + promotion_gain
             scored_captures.append(
-                (mvv_lva + promotion_gain, move, is_capture, int(capture_gain))
+                (mvv_lva + promotion_gain, m, is_capture, int(capture_gain))
             )
 
         if not scored_captures:
@@ -399,15 +396,15 @@ class Searcher:
 
         scored_captures.sort(key=lambda x: x[0], reverse=True)
 
-        for _, move, is_capture, _ in scored_captures:
+        for _, m, is_capture, _ in scored_captures:
             if not in_check and is_capture:
                 see_val = chess.see(
-                    pieces, board.turn, move.from_square, move.to_square
+                    pieces, board.turn, m & 63, (m >> 6) & 63
                 )
                 if see_val < 0:
                     continue
 
-            board.push(move)
+            board.push(m)
             score = -self.quiescence(board, -beta, -alpha, ply + 1)
             board.pop(return_move=False)
 
@@ -428,8 +425,8 @@ class Searcher:
         beta,
         ply,
         allow_nmp=True,
-        prev_move=None,
-        excluded_move=None,
+        prev_move=0,
+        excluded_move=0,
     ):
         self.nodes += 1
         if ply < MAX_PLY:
@@ -451,23 +448,20 @@ class Searcher:
 
         zobrist = self._tt_key(board)
         tt_entry = self.tt.get(zobrist)
-        tt_move = None
-        tt_move_val = 0
+        tt_move = 0
         tt_score = None
         tt_depth = 0
         tt_flag = -1
 
         if tt_entry is not None:
             _, tt_depth, tt_flag, tt_score, tt_move = tt_entry
-            if tt_move is not None:
-                tt_move_val = tt_move._value
 
             if tt_score > MATE_VALUE - 1000:
                 tt_score -= ply
             elif tt_score < -MATE_VALUE + 1000:
                 tt_score += ply
 
-            if not draw_claim and excluded_move is None and tt_depth >= depth:
+            if not draw_claim and excluded_move == 0 and tt_depth >= depth:
                 if tt_flag == 0:
                     if ply > 0:
                         return tt_score
@@ -500,7 +494,7 @@ class Searcher:
             ply > 0
             and not in_check
             and depth <= 3
-            and excluded_move is None
+            and excluded_move == 0
             and not draw_claim
             and static_eval + 342 * depth <= alpha
         ):
@@ -510,7 +504,7 @@ class Searcher:
             not in_check
             and depth <= 6
             and abs(beta) < MATE_VALUE - 1000
-            and excluded_move is None
+            and excluded_move == 0
             and not draw_claim
         ):
             rfp_margin = (80 - 20 * int(improving)) * depth
@@ -523,12 +517,11 @@ class Searcher:
             and ply > 0
             and depth >= 3
             and static_eval >= beta
-            and excluded_move is None
+            and excluded_move == 0
             and not draw_claim
         ):
             if self._can_null_move(board):
-                null_move = chess.Move.null()
-                board.push(null_move)
+                board.push(chess.MOVE_NULL)
                 R = int(3 + (depth // 4) + (1 if improving else 0))
                 null_score = -self.negamax(
                     board,
@@ -537,8 +530,8 @@ class Searcher:
                     -beta + 1,
                     ply + 1,
                     False,
-                    None,
-                    None,
+                    0,
+                    0,
                 )
                 board.pop(return_move=False)
 
@@ -553,16 +546,16 @@ class Searcher:
             and not in_check
             and depth >= 6
             and abs(beta) < MATE_VALUE - 1000
-            and excluded_move is None
+            and excluded_move == 0
             and not draw_claim
         ):
             mc_depth = depth - 1 - 3
             if mc_depth > 0:
                 mc_mailbox = self._update_mailbox(board._pieces, ply)
                 mc_legal_moves = board.legal_moves
-                if mc_legal_moves:
+                if len(mc_legal_moves) > 0:
                     mc_sorted = self.score_moves_fast(
-                        board, mc_legal_moves, depth, tt_move_val, prev_move, mc_mailbox
+                        board, mc_legal_moves, depth, tt_move, prev_move, mc_mailbox
                     )
                     mc_cuts = 0
 
@@ -576,7 +569,7 @@ class Searcher:
                             ply + 1,
                             False,
                             mc_move,
-                            None,
+                            0,
                         )
                         board.pop(return_move=False)
 
@@ -593,12 +586,12 @@ class Searcher:
             and not in_check
             and depth >= 4
             and beta < MATE_VALUE - 500
-            and excluded_move is None
+            and excluded_move == 0
             and not draw_claim
         ):
             prob_beta = beta + 200
-            for move in board.generate_legal_captures()[:8]:
-                board.push(move)
+            for m in board.generate_legal_captures()[:8]:
+                board.push(m)
                 qscore = -self.quiescence(board, -prob_beta, -prob_beta + 1, ply + 1)
                 score = -MATE_VALUE
                 if not self.stop and qscore >= prob_beta:
@@ -609,8 +602,8 @@ class Searcher:
                         -prob_beta + 1,
                         ply + 1,
                         True,
-                        move,
-                        None,
+                        m,
+                        0,
                     )
                 board.pop(return_move=False)
                 if self.stop:
@@ -621,8 +614,8 @@ class Searcher:
         singular_extension = False
         if (
             depth >= 8
-            and tt_move is not None
-            and excluded_move is None
+            and tt_move > 0
+            and excluded_move == 0
             and ply > 0
             and tt_depth >= depth - 3
             and tt_flag != 1
@@ -647,8 +640,8 @@ class Searcher:
                 singular_extension = True
 
         legal_moves = board.legal_moves
-        if not legal_moves:
-            if excluded_move:
+        if len(legal_moves) == 0:
+            if excluded_move > 0:
                 return alpha
             return -MATE_VALUE + ply if in_check else 0
         if draw_claim and beta <= 0:
@@ -656,62 +649,65 @@ class Searcher:
 
         mailbox = self._update_mailbox(board._pieces, ply)
         sorted_moves = self.score_moves_fast(
-            board, legal_moves, depth, tt_move_val, prev_move, mailbox
+            board, legal_moves, depth, tt_move, prev_move, mailbox
         )
 
         cm_val = self.counter_moves.get_move(prev_move)
         best_score = 0 if draw_claim else -MATE_VALUE
-        best_move_found = None
+        best_move_found = 0
         moves_searched = 0
         quiets_searched = []
 
-        for _, move in sorted_moves:
-            if excluded_move is not None and move == excluded_move:
+        for _, m in sorted_moves:
+            if excluded_move > 0 and m == excluded_move:
                 continue
 
-            m_val = move._value
-            is_cap = mailbox[move.to_square] != 0 or (
-                move.to_square == board.ep_square and mailbox[move.from_square] == 1
+            from_sq = m & 63
+            to_sq = (m >> 6) & 63
+            promo = (m >> 12) & 7
+
+            is_cap = mailbox[to_sq] != 0 or (
+                to_sq == board.ep_square and mailbox[from_sq] == 1
             )
             see_pruning_candidate = (
-                excluded_move is None
+                excluded_move == 0
                 and is_cap
                 and not in_check
-                and move.promotion is None
+                and promo == 0
                 and beta == alpha + 1
                 and depth <= 3
                 and moves_searched > 0
                 and not draw_claim
-                and not (tt_move == move and singular_extension)
+                and not (tt_move == m and singular_extension)
             )
             see_passes = not see_pruning_candidate or chess.fast_see(
                 board._pieces,
                 board.turn,
-                move.from_square,
-                move.to_square,
+                from_sq,
+                to_sq,
                 -80 * depth,
             )
-            board.push(move)
+            board.push(m)
 
             gives_check = board.is_check()
             quiet = (
                 not is_cap
                 and not gives_check
                 and not in_check
-                and move.promotion is None
+                and promo == 0
             )
 
             if (
-                excluded_move is None
+                excluded_move == 0
                 and is_cap
                 and not in_check
                 and not gives_check
-                and move.promotion is None
+                and promo == 0
                 and beta == alpha + 1
                 and depth <= 3
                 and moves_searched > 0
                 and not draw_claim
-                and not (tt_move == move and singular_extension)
+                and not (tt_move == m and singular_extension)
                 and not see_passes
             ):
                 board.pop(return_move=False)
@@ -719,7 +715,7 @@ class Searcher:
 
             lmp_limit = 4 + depth * depth
             if (
-                excluded_move is None
+                excluded_move == 0
                 and quiet
                 and beta == alpha + 1
                 and depth <= 3
@@ -730,7 +726,7 @@ class Searcher:
                 continue
 
             if (
-                excluded_move is None
+                excluded_move == 0
                 and quiet
                 and moves_searched > 0
                 and depth <= 3
@@ -744,14 +740,14 @@ class Searcher:
             extension = 0
             if gives_check and ply < 32:
                 extension = 1
-            elif tt_move is not None and move == tt_move and singular_extension:
+            elif tt_move > 0 and m == tt_move and singular_extension:
                 extension = 1
 
             new_depth = depth - 1 + extension
 
             if moves_searched == 1:
                 score = -self.negamax(
-                    board, new_depth, -beta, -alpha, ply + 1, True, move, None
+                    board, new_depth, -beta, -alpha, ply + 1, True, m, 0
                 )
             else:
                 r = 0
@@ -764,21 +760,16 @@ class Searcher:
 
                         if gives_check:
                             r -= 1
-                        if move.promotion is not None:
+                        if promo != 0:
                             r -= 1
                         if depth < self.killers.shape[0]:
-                            if (
-                                m_val == self.killers[depth, 0]
-                                or m_val == self.killers[depth, 1]
-                            ):
+                            if m == self.killers[depth, 0] or m == self.killers[depth, 1]:
                                 r -= 1
-                        if cm_val is not None and m_val == cm_val:
+                        if cm_val != 0 and m == cm_val:
                             r -= 1
 
                         t_idx = 0 if board.turn else 1
-                        hist_val = int(
-                            self.history.table[t_idx, move.from_square, move.to_square]
-                        )
+                        hist_val = int(self.history.table[t_idx, from_sq, to_sq])
                         if hist_val > 8000:
                             r -= 2
                         elif hist_val > 2000:
@@ -811,12 +802,12 @@ class Searcher:
                     -alpha,
                     ply + 1,
                     True,
-                    move,
-                    None,
+                    m,
+                    0,
                 )
                 if score > alpha and (score < beta or r > 0):
                     score = -self.negamax(
-                        board, new_depth, -beta, -alpha, ply + 1, True, move, None
+                        board, new_depth, -beta, -alpha, ply + 1, True, m, 0
                     )
 
             board.pop(return_move=False)
@@ -825,16 +816,16 @@ class Searcher:
                 return 0
 
             if not is_cap:
-                quiets_searched.append(move)
+                quiets_searched.append(m)
 
             if score > best_score:
                 best_score = score
-                best_move_found = move
+                best_move_found = m
                 if ply < MAX_PLY - 1:
-                    self.pv_table[ply][ply] = move
+                    self.pv_table[ply, ply] = m
                     nxt_len = self.pv_length[ply + 1]
                     for j in range(ply + 1, nxt_len):
-                        self.pv_table[ply][j] = self.pv_table[ply + 1][j]
+                        self.pv_table[ply, j] = self.pv_table[ply + 1, j]
                     self.pv_length[ply] = max(ply + 1, nxt_len)
 
             if score > alpha:
@@ -842,28 +833,25 @@ class Searcher:
 
             if alpha >= beta:
                 if not is_cap and depth < self.killers.shape[0]:
-                    m_val = move._value
-                    if m_val != self.killers[depth, 0]:
+                    if m != self.killers[depth, 0]:
                         self.killers[depth, 1] = self.killers[depth, 0]
-                        self.killers[depth, 0] = m_val
+                        self.killers[depth, 0] = m
 
                     bonus = depth * depth
-                    self.history.add(
-                        board.turn, move.from_square, move.to_square, bonus
-                    )
+                    self.history.add(board.turn, from_sq, to_sq, bonus)
 
-                    if prev_move:
-                        self.counter_moves.store(prev_move, move)
+                    if prev_move > 0:
+                        self.counter_moves.store(prev_move, m)
 
                     for qm in quiets_searched:
-                        if qm != move:
+                        if qm != m:
                             self.history.add(
-                                board.turn, qm.from_square, qm.to_square, -bonus
+                                board.turn, qm & 63, (qm >> 6) & 63, -bonus
                             )
                 break
 
         if (
-            excluded_move is None
+            excluded_move == 0
             and not draw_claim
             and not in_check
             and abs(best_score) < MATE_VALUE - 1000
@@ -873,7 +861,7 @@ class Searcher:
             ):
                 self.corr_hist.update(board, depth, best_score - static_eval)
 
-        if excluded_move is None and not draw_claim:
+        if excluded_move == 0 and not draw_claim:
             flag = 0
             if best_score <= alpha_orig:
                 flag = 1
@@ -899,12 +887,12 @@ class Searcher:
             if not entry:
                 break
 
-            move = entry[4]
-            if not move or not curr.is_legal(move):
+            m = entry[4]
+            if m <= 0 or not curr.is_legal(m):
                 break
 
-            pv.append(move)
-            curr.push(move)
+            pv.append(m)
+            curr.push(m)
 
         return pv
 
@@ -956,12 +944,13 @@ class Searcher:
     ):
         if self.own_book and (not fixed_depth or fixed_depth > 1 and not shut_up):
             book_move = self.book.probe(board)
-            if book_move:
+            if book_move and book_move > 0:
+                uci_m = chess.move_to_uci(book_move)
                 if not silent:
-                    print(f"info depth 1 score cp 20 time 1 pv {book_move.uci()}")
-                    print(f"bestmove {book_move.uci()}")
+                    print(f"info depth 1 score cp 20 time 1 pv {uci_m}")
+                    print(f"bestmove {uci_m}")
 
-                return book_move.uci()
+                return uci_m
 
         self.nodes = 0
         self.start_time = time.perf_counter()
@@ -977,7 +966,7 @@ class Searcher:
         self.history.decay()
 
         legal_moves = board.legal_moves
-        if not legal_moves:
+        if len(legal_moves) == 0:
             if shut_up:
                 return
             if not silent:
@@ -1008,8 +997,9 @@ class Searcher:
 
                 return best_m
 
-        best_move = legal_moves[0].uci()
-        ponder_move = None
+        best_move_int = int(legal_moves[0])
+        best_move_uci = chess.move_to_uci(best_move_int)
+        ponder_move_uci = None
         best_val_prev = None
         max_depth = fixed_depth if fixed_depth else 64
 
@@ -1054,21 +1044,22 @@ class Searcher:
 
                 pv_list = self.get_pv_from_tt(board)
                 if not pv_list and self.pv_length[0] > 0:
-                    pv_list = [self.pv_table[0][i] for i in range(self.pv_length[0])]
+                    pv_list = [int(self.pv_table[0, i]) for i in range(self.pv_length[0])]
 
                 if pv_list:
-                    pv_str = " ".join(m.uci() for m in pv_list)
-                    best_move = pv_list[0].uci()
-                    ponder_move = pv_list[1].uci() if len(pv_list) > 1 else None
+                    pv_str = " ".join(chess.move_to_uci(m) for m in pv_list)
+                    best_move_int = pv_list[0]
+                    best_move_uci = chess.move_to_uci(best_move_int)
+                    ponder_move_uci = chess.move_to_uci(pv_list[1]) if len(pv_list) > 1 else None
 
                     if len(pv_list) > 2:
-                        self.expected_opponent_move = ponder_move
-                        self.premove_reply = pv_list[2].uci()
+                        self.expected_opponent_move = pv_list[1]
+                        self.premove_reply = pv_list[2]
                     else:
-                        self.expected_opponent_move = None
-                        self.premove_reply = None
+                        self.expected_opponent_move = 0
+                        self.premove_reply = 0
                 else:
-                    pv_str = best_move
+                    pv_str = best_move_uci
 
                 elapsed = max(time.perf_counter() - self.start_time, 1e-6)
                 nps = int(self.nodes / elapsed)
@@ -1101,12 +1092,11 @@ class Searcher:
             return
 
         if not silent:
-            if best_move and ponder_move:
-                print(f"bestmove {best_move} ponder {ponder_move}")
-            elif best_move:
-                print(f"bestmove {best_move}")
+            if best_move_uci and ponder_move_uci:
+                print(f"bestmove {best_move_uci} ponder {ponder_move_uci}")
+            elif best_move_uci:
+                print(f"bestmove {best_move_uci}")
             else:
-                print(f"bestmove {legal_moves[0].uci()}")
+                print(f"bestmove {chess.move_to_uci(legal_moves[0])}")
 
-        return best_move
- 
+        return best_move_uci
