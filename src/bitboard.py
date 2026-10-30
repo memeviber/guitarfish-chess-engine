@@ -13,6 +13,8 @@ PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING = range(1, 7)
 A1, B1, C1, D1, E1, F1, G1, H1 = range(8)
 A8, B8, C8, D8, E8, F8, G8, H8 = range(56, 64)
 
+MOVE_NULL = -1
+
 _FILE_A = np.uint64(0x0101010101010101)
 _FILE_B = np.uint64(0x0202020202020202)
 _FILE_C = np.uint64(0x0404040404040404)
@@ -83,7 +85,6 @@ for _square in range(64):
         b_span |= np.uint64(0xFF << (r_ahead * 8)) & file_span
     _PASSED_BLACK[_square] = b_span
 
-# fmt: off
 _DEBRUIJN_INDEX = np.array(
     (
          0,  1, 48,  2, 57, 49, 28,  3,
@@ -97,7 +98,6 @@ _DEBRUIJN_INDEX = np.array(
     ),
     dtype=np.int64,
 )
-# fmt: on
 
 _PIECE_ZOBRIST = np.zeros((12, 64), dtype=np.uint64)
 for pt in range(6):
@@ -106,20 +106,58 @@ for pt in range(6):
         _PIECE_ZOBRIST[pt + 6, sq] = POLYGLOT_KEYS[(pt * 2) * 64 + sq]
 
 
-@njit(cache = True, inline="always", fastmath=True)
+def make_move(from_sq: int, to_sq: int, promo: int = 0) -> int:
+    return int(from_sq | (to_sq << 6) | (promo << 12))
+
+
+def move_from_sq(m: int) -> int:
+    return m & 63
+
+
+def move_to_sq(m: int) -> int:
+    return (m >> 6) & 63
+
+
+def move_promo(m: int) -> int:
+    return (m >> 12) & 7
+
+
+def move_to_uci(m: int) -> str:
+    if m <= 0:
+        return "(none)"
+    from_sq = m & 63
+    to_sq = (m >> 6) & 63
+    promo = (m >> 12) & 7
+    text = chr(97 + (from_sq & 7)) + chr(49 + from_sq // 8)
+    text += chr(97 + (to_sq & 7)) + chr(49 + to_sq // 8)
+    if promo:
+        text += {KNIGHT: "n", BISHOP: "b", ROOK: "r", QUEEN: "q"}[promo]
+    return text
+
+
+def move_from_uci(text: str) -> int:
+    source = (ord(text[0]) - 97) + (ord(text[1]) - 49) * 8
+    target = (ord(text[2]) - 97) + (ord(text[3]) - 49) * 8
+    promotion = 0
+    if len(text) == 5:
+        promotion = {"n": KNIGHT, "b": BISHOP, "r": ROOK, "q": QUEEN}[text[4]]
+    return make_move(source, target, promotion)
+
+
+@njit(cache=True, inline="always", fastmath=True)
 def _lsb_index(bitboard):
     index = (bitboard * _DEBRUIJN) >> np.uint64(58)
     return _DEBRUIJN_INDEX[index]
 
 
-@njit(cache = True, inline="always", fastmath=True)
+@njit(cache=True, inline="always", fastmath=True)
 def _pop_lsb(bitboard):
     bit = bitboard & (np.uint64(0) - bitboard)
     square = _lsb_index(bit)
     return bit, square
 
 
-@njit(cache = True, inline="always", fastmath=True)
+@njit(cache=True, inline="always", fastmath=True)
 def _ray_attacks(square, occupied, dr, df):
     rank = square // 8
     file = square & 7
@@ -136,7 +174,7 @@ def _ray_attacks(square, occupied, dr, df):
     return attacks
 
 
-@njit(cache = True, inline="always", fastmath=True)
+@njit(cache=True, inline="always", fastmath=True)
 def _bishop_attacks(square, occupied):
     attacks = np.uint64(0)
     for dr, df in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
@@ -144,7 +182,7 @@ def _bishop_attacks(square, occupied):
     return attacks
 
 
-@njit(cache = True, inline="always", fastmath=True)
+@njit(cache=True, inline="always", fastmath=True)
 def _rook_attacks(square, occupied):
     attacks = np.uint64(0)
     for dr, df in ((1, 0), (-1, 0), (0, 1), (0, -1)):
@@ -152,284 +190,12 @@ def _rook_attacks(square, occupied):
     return attacks
 
 
-@njit(cache = True, inline="always", fastmath=True)
+@njit(cache=True, inline="always", fastmath=True)
 def _queen_attacks(square, occupied):
     return _bishop_attacks(square, occupied) | _rook_attacks(square, occupied)
 
 
-@njit(cache = True, fastmath=True)
-def get_color_attacks(pieces, is_white):
-    offset = 0 if is_white else 6
-    occupied = np.uint64(0)
-    for i in range(12):
-        occupied |= pieces[i]
-
-    attacks = np.uint64(0)
-    pawns = pieces[offset]
-    if is_white:
-        attacks |= ((pawns << np.uint64(7)) & ~_FILE_H) | (
-            (pawns << np.uint64(9)) & ~_FILE_A
-        )
-    else:
-        attacks |= ((pawns >> np.uint64(7)) & ~_FILE_A) | (
-            (pawns >> np.uint64(9)) & ~_FILE_H
-        )
-
-    knights = pieces[offset + 1]
-    while knights:
-        bit, sq = _pop_lsb(knights)
-        attacks |= _KNIGHT_ATTACKS[sq]
-        knights ^= bit
-
-    bishops = pieces[offset + 2]
-    while bishops:
-        bit, sq = _pop_lsb(bishops)
-        attacks |= _bishop_attacks(sq, occupied)
-        bishops ^= bit
-
-    rooks = pieces[offset + 3]
-    while rooks:
-        bit, sq = _pop_lsb(rooks)
-        attacks |= _rook_attacks(sq, occupied)
-        rooks ^= bit
-
-    queens = pieces[offset + 4]
-    while queens:
-        bit, sq = _pop_lsb(queens)
-        attacks |= _queen_attacks(sq, occupied)
-        queens ^= bit
-
-    kings = pieces[offset + 5]
-    if kings:
-        _, sq = _pop_lsb(kings)
-        attacks |= _KING_ATTACKS[sq]
-
-    return attacks
-
-
-@njit(cache = True, fastmath=True)
-def extract_indices(pieces, turn_white, out_stm, out_opp):
-    w_count = 0
-    b_count = 0
-    w_idx = np.empty(256, dtype=np.int64)
-    b_idx = np.empty(256, dtype=np.int64)
-
-    for p_type in range(6):
-        bb = pieces[p_type]
-        while bb:
-            bit, sq = _pop_lsb(bb)
-            w_idx[w_count] = p_type * 64 + sq
-            w_count += 1
-            b_idx[b_count] = (p_type + 6) * 64 + (sq ^ 56)
-            b_count += 1
-            bb ^= bit
-
-        bb = pieces[p_type + 6]
-        while bb:
-            bit, sq = _pop_lsb(bb)
-            b_idx[b_count] = p_type * 64 + (sq ^ 56)
-            b_count += 1
-            w_idx[w_count] = (p_type + 6) * 64 + sq
-            w_count += 1
-            bb ^= bit
-
-    w_attacks = get_color_attacks(pieces, True)
-    b_attacks = get_color_attacks(pieces, False)
-
-    w_occ = pieces[0] | pieces[1] | pieces[2] | pieces[3] | pieces[4] | pieces[5]
-    b_occ = pieces[6] | pieces[7] | pieces[8] | pieces[9] | pieces[10] | pieces[11]
-
-    contested = w_attacks & b_attacks
-    while contested:
-        bit, sq = _pop_lsb(contested)
-        w_idx[w_count] = 768 + sq
-        w_count += 1
-        b_idx[b_count] = 768 + (sq ^ 56)
-        b_count += 1
-        contested ^= bit
-
-    w_attacked = w_occ & b_attacks
-    b_attacked = b_occ & w_attacks
-    w_hanging = w_attacked & ~w_attacks
-    b_hanging = b_attacked & ~b_attacks
-
-    bb = w_attacked
-    while bb:
-        bit, sq = _pop_lsb(bb)
-        w_idx[w_count] = 832 + sq
-        w_count += 1
-        b_idx[b_count] = 896 + (sq ^ 56)
-        b_count += 1
-        bb ^= bit
-
-    bb = b_attacked
-    while bb:
-        bit, sq = _pop_lsb(bb)
-        w_idx[w_count] = 896 + sq
-        w_count += 1
-        b_idx[b_count] = 832 + (sq ^ 56)
-        b_count += 1
-        bb ^= bit
-
-    bb = w_hanging
-    while bb:
-        bit, sq = _pop_lsb(bb)
-        w_idx[w_count] = 960 + sq
-        w_count += 1
-        b_idx[b_count] = 1024 + (sq ^ 56)
-        b_count += 1
-        bb ^= bit
-
-    bb = b_hanging
-    while bb:
-        bit, sq = _pop_lsb(bb)
-        w_idx[w_count] = 1024 + sq
-        w_count += 1
-        b_idx[b_count] = 960 + (sq ^ 56)
-        b_count += 1
-        bb ^= bit
-
-    if pieces[5]:
-        _, wk_sq = _pop_lsb(pieces[5])
-        bb = b_attacks & _KING_ZONE_MASK[wk_sq]
-        while bb:
-            bit, sq = _pop_lsb(bb)
-            w_idx[w_count] = 1088 + sq
-            w_count += 1
-            b_idx[b_count] = 1152 + (sq ^ 56)
-            b_count += 1
-            bb ^= bit
-        if b_attacks & (np.uint64(1) << np.uint64(wk_sq)):
-            w_idx[w_count] = 1216
-            w_count += 1
-
-    if pieces[11]:
-        _, bk_sq = _pop_lsb(pieces[11])
-        bb = w_attacks & _KING_ZONE_MASK[bk_sq]
-        while bb:
-            bit, sq = _pop_lsb(bb)
-            b_idx[b_count] = 1088 + (sq ^ 56)
-            b_count += 1
-            w_idx[w_count] = 1152 + sq
-            w_count += 1
-            bb ^= bit
-        if w_attacks & (np.uint64(1) << np.uint64(bk_sq)):
-            b_idx[b_count] = 1216
-            b_count += 1
-
-    w_pawns = pieces[0]
-    b_pawns = pieces[6]
-
-    bb = w_pawns
-    while bb:
-        bit, sq = _pop_lsb(bb)
-        if not (b_pawns & _PASSED_WHITE[sq]):
-            w_idx[w_count] = 1217 + sq
-            w_count += 1
-            b_idx[b_count] = 1281 + (sq ^ 56)
-            b_count += 1
-        bb ^= bit
-
-    bb = b_pawns
-    while bb:
-        bit, sq = _pop_lsb(bb)
-        if not (w_pawns & _PASSED_BLACK[sq]):
-            b_idx[b_count] = 1217 + (sq ^ 56)
-            b_count += 1
-            w_idx[w_count] = 1281 + sq
-            w_count += 1
-        bb ^= bit
-
-    for f in range(8):
-        f_mask = _FILES[f]
-        adj_mask = _ADJACENT_FILES[f]
-        wp_f = w_pawns & f_mask
-        if wp_f:
-            if not (w_pawns & adj_mask):
-                bb = wp_f
-                while bb:
-                    bit, sq = _pop_lsb(bb)
-                    w_idx[w_count] = 1345 + sq
-                    w_count += 1
-                    b_idx[b_count] = 1409 + (sq ^ 56)
-                    b_count += 1
-                    bb ^= bit
-            if wp_f & (wp_f - np.uint64(1)):
-                bb = wp_f
-                while bb:
-                    bit, sq = _pop_lsb(bb)
-                    w_idx[w_count] = 1473 + sq
-                    w_count += 1
-                    b_idx[b_count] = 1537 + (sq ^ 56)
-                    b_count += 1
-                    bb ^= bit
-
-        bp_f = b_pawns & f_mask
-        if bp_f:
-            if not (b_pawns & adj_mask):
-                bb = bp_f
-                while bb:
-                    bit, sq = _pop_lsb(bb)
-                    b_idx[b_count] = 1345 + (sq ^ 56)
-                    b_count += 1
-                    w_idx[w_count] = 1409 + sq
-                    w_count += 1
-                    bb ^= bit
-            if bp_f & (bp_f - np.uint64(1)):
-                bb = bp_f
-                while bb:
-                    bit, sq = _pop_lsb(bb)
-                    b_idx[b_count] = 1473 + (sq ^ 56)
-                    b_count += 1
-                    w_idx[w_count] = 1537 + sq
-                    w_count += 1
-                    bb ^= bit
-
-    w_pattacks = ((w_pawns & ~_FILE_H) << np.uint64(9)) | (
-        (w_pawns & ~_FILE_A) << np.uint64(7)
-    )
-    w_phalanx = ((w_pawns & ~_FILE_H) << np.uint64(1)) | (
-        (w_pawns & ~_FILE_A) >> np.uint64(1)
-    )
-    bb = w_pawns & (w_pattacks | w_phalanx)
-    while bb:
-        bit, sq = _pop_lsb(bb)
-        w_idx[w_count] = 1601 + sq
-        w_count += 1
-        b_idx[b_count] = 1665 + (sq ^ 56)
-        b_count += 1
-        bb ^= bit
-
-    b_pattacks = ((b_pawns & ~_FILE_A) >> np.uint64(9)) | (
-        (b_pawns & ~_FILE_H) >> np.uint64(7)
-    )
-    b_phalanx = ((b_pawns & ~_FILE_A) >> np.uint64(1)) | (
-        (b_pawns & ~_FILE_H) << np.uint64(1)
-    )
-    bb = b_pawns & (b_pattacks | b_phalanx)
-    while bb:
-        bit, sq = _pop_lsb(bb)
-        b_idx[b_count] = 1601 + (sq ^ 56)
-        b_count += 1
-        w_idx[w_count] = 1665 + sq
-        w_count += 1
-        bb ^= bit
-
-    if turn_white:
-        for i in range(w_count):
-            out_stm[i] = w_idx[i]
-        for i in range(b_count):
-            out_opp[i] = b_idx[i]
-        return w_count, b_count
-    else:
-        for i in range(b_count):
-            out_stm[i] = b_idx[i]
-        for i in range(w_count):
-            out_opp[i] = w_idx[i]
-        return b_count, w_count
-
-
-@njit(cache = True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def is_attacked(square, by_white, pieces):
     occupied = np.uint64(0)
     for i in range(12):
@@ -469,7 +235,7 @@ def is_attacked(square, by_white, pieces):
     return False
 
 
-@njit(cache = True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def _generate_pseudo_into(pieces, white_to_move, castling, ep_square, moves):
     count = 0
     own_start = 0 if white_to_move else 6
@@ -598,7 +364,7 @@ def _generate_pseudo_into(pieces, white_to_move, castling, ep_square, moves):
     return moves, count
 
 
-@njit(cache = True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def is_legal_encoded(pieces, white_to_move, ep_square, value):
     test_pieces = np.empty(12, dtype=np.uint64)
     for i in range(12):
@@ -656,7 +422,7 @@ def is_legal_encoded(pieces, white_to_move, ep_square, value):
     return not is_attacked(king_square, not white_to_move, test_pieces)
 
 
-@njit(cache = True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def _generate_legal_into(pieces, white_to_move, castling, ep_square, pseudo, legal):
     pseudo, pseudo_count = _generate_pseudo_into(
         pieces, white_to_move, castling, ep_square, pseudo
@@ -683,7 +449,7 @@ def _generate_legal_into(pieces, white_to_move, castling, ep_square, pseudo, leg
     return legal, count
 
 
-@njit(cache = True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def _generate_legal_noisy_into(
     pieces, white_to_move, castling, ep_square, pseudo, legal
 ):
@@ -738,7 +504,7 @@ def _generate_legal_noisy_into(
 _SEE_PIECE_VALUES = np.array([100, 300, 300, 500, 900, 20000], dtype=np.int64)
 
 
-@njit(cache = True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def see(pieces, white_to_move, from_sq, to_sq):
     target_bit = np.uint64(1) << np.uint64(to_sq)
     from_bit = np.uint64(1) << np.uint64(from_sq)
@@ -845,12 +611,12 @@ def see(pieces, white_to_move, from_sq, to_sq):
     return gain[0]
 
 
-@njit(cache = True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def fast_see(pieces, white_to_move, from_sq, to_sq, threshold=0):
     return see(pieces, white_to_move, from_sq, to_sq) >= threshold
 
 
-@njit(cache = True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def _apply_encoded(pieces, white_to_move, castling, ep_square, value):
     source = value & 63
     target = (value >> 6) & 63
@@ -903,14 +669,14 @@ def _apply_encoded(pieces, white_to_move, castling, ep_square, value):
         elif source == H8:
             castling &= ~4
 
-    if captured_index == 3 + enemy_start:
-        if target == A1:
+    if captured_index == 3 + enemy_offset:
+        if to_sq == A1:
             castling &= ~2
-        elif target == H1:
+        elif to_sq == H1:
             castling &= ~1
-        elif target == A8:
+        elif to_sq == A8:
             castling &= ~8
-        elif target == H8:
+        elif to_sq == H8:
             castling &= ~4
 
     next_ep = -1
@@ -919,74 +685,7 @@ def _apply_encoded(pieces, white_to_move, castling, ep_square, value):
     return not white_to_move, castling, next_ep
 
 
-@njit(cache = True, fastmath=True)
-def _perft_stack(
-    pieces,
-    white_to_move,
-    castling,
-    ep_square,
-    depth,
-    piece_stack,
-    pseudo_stack,
-    move_stack,
-    ply,
-):
-    if depth == 0:
-        return 1
-    moves, count = _generate_legal_into(
-        pieces,
-        white_to_move,
-        castling,
-        ep_square,
-        pseudo_stack[ply],
-        move_stack[ply],
-    )
-    nodes = 0
-    for index in range(count):
-        for p_idx in range(12):
-            piece_stack[ply + 1, p_idx] = pieces[p_idx]
-        child_turn, child_castling, child_ep = _apply_encoded(
-            piece_stack[ply + 1],
-            white_to_move,
-            castling,
-            ep_square,
-            moves[index],
-        )
-        nodes += _perft_stack(
-            piece_stack[ply + 1],
-            child_turn,
-            child_castling,
-            child_ep,
-            depth - 1,
-            piece_stack,
-            pseudo_stack,
-            move_stack,
-            ply + 1,
-        )
-    return nodes
-
-
-@njit(cache = True, fastmath=True)
-def _perft_encoded(pieces, white_to_move, castling, ep_square, depth):
-    piece_stack = np.empty((depth + 1, 12), dtype=np.uint64)
-    pseudo_stack = np.empty((depth + 1, 256), dtype=np.int64)
-    move_stack = np.empty((depth + 1, 256), dtype=np.int64)
-    for p_idx in range(12):
-        piece_stack[0, p_idx] = pieces[p_idx]
-    return _perft_stack(
-        piece_stack[0],
-        white_to_move,
-        castling,
-        ep_square,
-        depth,
-        piece_stack,
-        pseudo_stack,
-        move_stack,
-        0,
-    )
-
-
-@njit(cache = True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def _polyglot_hash(pieces, castling_rights, ep_square, turn_white, poly_keys):
     h = np.uint64(0)
     for pt in range(6):
@@ -1031,7 +730,7 @@ def _polyglot_hash(pieces, castling_rights, ep_square, turn_white, poly_keys):
     return int(h)
 
 
-@njit(cache = True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def _get_ep_hash_key(pieces, ep_square, turn_white, poly_keys):
     if ep_square < 0:
         return np.uint64(0)
@@ -1096,11 +795,6 @@ class PolyglotBook:
 
                     from_sq = from_r * 8 + from_f
                     to_sq = to_r * 8 + to_f
-                    promo = (
-                        {1: KNIGHT, 2: BISHOP, 3: ROOK, 4: QUEEN}.get(promo_code, None)
-                        if promo_code
-                        else None
-                    )
 
                     pt = board.piece_type_at(from_sq)
                     if pt == KING:
@@ -1113,9 +807,9 @@ class PolyglotBook:
                         elif from_sq == E8 and to_sq == A8:
                             to_sq = C8
 
-                    move = Move(from_sq, to_sq, promo)
-                    if board.is_legal(move):
-                        matching_moves.append(move)
+                    move_val = make_move(from_sq, to_sq, promo_code)
+                    if board.is_legal(move_val):
+                        matching_moves.append(move_val)
                         matching_weights.append(max(1, weight))
                     idx += 1
 
@@ -1146,62 +840,6 @@ class _PolyglotNamespace:
 polyglot = _PolyglotNamespace()
 
 
-class Move:
-    __slots__ = ("from_square", "to_square", "promotion", "_value")
-
-    def __init__(self, from_square=0, to_square=0, promotion=None, value=None):
-        self.from_square = from_square
-        self.to_square = to_square
-        self.promotion = promotion
-        self._value = (
-            int(value)
-            if value is not None
-            else int(from_square | (to_square << 6) | ((promotion or 0) << 12))
-        )
-
-    @classmethod
-    def from_uci(cls, text):
-        source = (ord(text[0]) - 97) + (ord(text[1]) - 49) * 8
-        target = (ord(text[2]) - 97) + (ord(text[3]) - 49) * 8
-        promotion = None
-        if len(text) == 5:
-            promotion = {"n": KNIGHT, "b": BISHOP, "r": ROOK, "q": QUEEN}[text[4]]
-        return cls(source, target, promotion)
-
-    @staticmethod
-    def null():
-        return _NULL_MOVE
-
-    @classmethod
-    def from_value(cls, value):
-        v = int(value)
-        promotion = (v >> 12) & 7
-        return cls(v & 63, (v >> 6) & 63, promotion or None, v)
-
-    def uci(self):
-        text = chr(97 + (self.from_square & 7)) + chr(49 + self.from_square // 8)
-        text += chr(97 + (self.to_square & 7)) + chr(49 + self.to_square // 8)
-        if self.promotion:
-            text += {KNIGHT: "n", BISHOP: "b", ROOK: "r", QUEEN: "q"}[self.promotion]
-        return text
-
-    def __hash__(self):
-        return self._value
-
-    def __eq__(self, other):
-        if isinstance(other, Move):
-            return self._value == other._value
-        elif isinstance(other, int):
-            return self._value == other
-        return False
-
-    def __bool__(self):
-        return True
-
-
-_NULL_MOVE = Move(0, 0, value=-1)
-
-
 class Piece:
     __slots__ = ("piece_type", "color")
 
@@ -1221,7 +859,7 @@ class Board:
         self._state_halfmove = np.zeros(MAX_HISTORY, dtype=np.int64)
         self._state_fullmove = np.ones(MAX_HISTORY, dtype=np.int64)
         self._state_hash = np.zeros(MAX_HISTORY, dtype=np.uint64)
-        self._state_moves = [None] * MAX_HISTORY
+        self._state_moves = np.full(MAX_HISTORY, -1, dtype=np.int64)
 
         self._state_moved_pt = np.full(MAX_HISTORY, -1, dtype=np.int8)
         self._state_captured_pt = np.full(MAX_HISTORY, -1, dtype=np.int8)
@@ -1272,9 +910,6 @@ class Board:
 
     @property
     def move_stack(self):
-        for index, move in enumerate(self._move_stack):
-            if move is None:
-                self._move_stack[index] = Move.from_value(int(self._state_moves[index]))
         return self._move_stack
 
     def pieces(self, piece_type, color):
@@ -1303,12 +938,10 @@ class Board:
             is_attacked(self._king_square(self.turn), not self.turn, self._pieces)
         )
 
-    def see(self, move):
-        m_val = move._value if isinstance(move, Move) else move
+    def see(self, m_val: int):
         return int(see(self._pieces, self.turn, m_val & 63, (m_val >> 6) & 63))
 
-    def fast_see(self, move, threshold=0):
-        m_val = move._value if isinstance(move, Move) else move
+    def fast_see(self, m_val: int, threshold=0):
         return bool(
             fast_see(
                 self._pieces,
@@ -1329,9 +962,7 @@ class Board:
             self._movegen_pseudo,
             self._movegen_legal,
         )
-        return [
-            Move.from_value(int(self._movegen_legal[index])) for index in range(count)
-        ]
+        return self._movegen_legal[:count].copy()
 
     def generate_legal_noisy_moves(self):
         _, count, has_legal_move = _generate_legal_noisy_into(
@@ -1342,16 +973,13 @@ class Board:
             self._movegen_pseudo,
             self._movegen_legal,
         )
-        return [
-            Move.from_value(int(self._movegen_legal[index])) for index in range(count)
-        ], has_legal_move
+        return self._movegen_legal[:count].copy(), has_legal_move
 
     def generate_legal_captures(self):
         noisy_moves, _ = self.generate_legal_noisy_moves()
-        return [move for move in noisy_moves if self.is_capture(move)]
+        return [m for m in noisy_moves if self.is_capture(m)]
 
-    def is_capture(self, move):
-        m_val = move._value if isinstance(move, Move) else move
+    def is_capture(self, m_val: int):
         to_sq = (m_val >> 6) & 63
         to_bit = np.uint64(1) << np.uint64(to_sq)
         enemy_offset = 6 if self.turn else 0
@@ -1363,23 +991,21 @@ class Board:
             & (np.uint64(1) << np.uint64(m_val & 63))
         )
 
-    def is_en_passant(self, move):
-        m_val = move._value if isinstance(move, Move) else move
+    def is_en_passant(self, m_val: int):
         to_sq = (m_val >> 6) & 63
         from_sq = m_val & 63
         return to_sq == self.ep_square and (
             self._pieces[0 if self.turn else 6] & (np.uint64(1) << np.uint64(from_sq))
         )
 
-    def is_castling(self, move):
-        m_val = move._value if isinstance(move, Move) else move
+    def is_castling(self, m_val: int):
         from_sq = m_val & 63
         to_sq = (m_val >> 6) & 63
         return (
             self._pieces[5 if self.turn else 11] & (np.uint64(1) << np.uint64(from_sq))
         ) and abs(to_sq - from_sq) == 2
 
-    def push_raw(self, move_val: int):
+    def push(self, move_val: int):
         ply = self._ply
         self._state_pieces[ply] = self._pieces
         self._state_turn[ply] = self.turn
@@ -1390,8 +1016,9 @@ class Board:
         self._state_hash[ply] = self._hash
         self._state_moves[ply] = move_val
         self._ply += 1
+        self._move_stack.append(move_val)
 
-        if move_val == -1:
+        if move_val == MOVE_NULL:
             if self.ep_square >= 0:
                 self._hash ^= _get_ep_hash_key(
                     self._pieces, self.ep_square, self.turn, POLYGLOT_KEYS
@@ -1522,20 +1149,10 @@ class Board:
         self._hash ^= POLYGLOT_KEYS[780]
         self._hash_history.append(int(self._hash))
 
-    def push(self, move):
-        if isinstance(move, int):
-            m_val = move
-            self.push_raw(m_val)
-            self._move_stack.append(None)
-        else:
-            m_val = move._value
-            self.push_raw(m_val)
-            self._move_stack.append(move)
-
     def pop(self, return_move=True):
         self._ply -= 1
         ply = self._ply
-        move_val = self._state_moves[ply]
+        move_val = int(self._state_moves[ply])
 
         self._pieces[:] = self._state_pieces[ply]
         self.turn = bool(self._state_turn[ply])
@@ -1549,16 +1166,10 @@ class Board:
             self._move_stack.pop()
         self._hash_history.pop()
 
-        if not return_move:
-            return None
-        return (
-            Move.from_value(move_val)
-            if isinstance(move_val, (int, np.integer))
-            else move_val
-        )
+        return move_val if return_move else MOVE_NULL
 
-    def is_legal(self, move):
-        return move in self.legal_moves
+    def is_legal(self, move_val: int):
+        return move_val in self.legal_moves
 
     def is_repetition(self, count):
         if count <= 1:
@@ -1648,14 +1259,3 @@ class Board:
             )
         )
         self._hash_history = [int(self._hash)]
-
-    def perft(self, depth):
-        return int(
-            _perft_encoded(
-                self._pieces,
-                self.turn,
-                self.castling_rights,
-                self.ep_square,
-                depth,
-            )
-        )
