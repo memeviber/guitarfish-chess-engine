@@ -14,34 +14,16 @@ MAX_PLY = 64
 TT_HALF_MOVE_KEY = 0x9E3779B97F4A7C15
 UINT64_MASK = (1 << 64) - 1
 
-DEFAULT_PARAMS = {
-    "rfp_base": 80.0,
-    "rfp_improving": 20.0,
-    "nmp_base": 3.0,
-    "nmp_divisor": 4.0,
-    "lmr_base": 0.75,
-    "lmr_divisor": 2.25,
-    "aspiration_delta": 35.0,
-    "se_margin_mult": 2.0,
-    "razor_margin": 342.0,
-    "probcut_margin": 200.0,
-    "see_prune_margin": 80.0,
-    "lmp_base": 4.0,
-    "lmp_depth_factor": 1.0,
-    "child_futility_margin": 90.0,
-    "multicut_depth": 6.0,
-    "multicut_m": 8.0,
-    "multicut_c": 3.0,
-    "multicut_r": 3.0,
-}
 
-
-def build_lmr_table(base, divisor):
+def build_lmr_table():
     table = np.zeros((64, 64), dtype=np.int32)
     for d in range(1, 64):
         for mc in range(1, 64):
-            table[d, mc] = int(base + math.log(d) * math.log(mc) / divisor)
+            table[d, mc] = int(0.75 + math.log(d) * math.log(mc) / 2.25)
     return table
+
+
+LMR_TABLE = build_lmr_table()
 
 
 class FastHistory:
@@ -81,6 +63,41 @@ class FastCounterMoves:
         if prev_move is not None:
             idx = (prev_move.from_square) | (prev_move.to_square << 6)
             self.table[idx] = move._value
+
+
+class FastCorrectionHistory:
+    def __init__(self, size=16384):
+        self.size = size
+        self.mask = size - 1
+        self.table = np.zeros((2, self.size), dtype=np.int32)
+
+    def clear(self):
+        self.table.fill(0)
+
+    @staticmethod
+    def _pawn_key(board):
+        if hasattr(board, "pawn_hash"):
+            return int(board.pawn_hash)
+        wp = int(board._pieces[0])
+        bp = int(board._pieces[6])
+        k = (wp ^ (bp * 0x9E3779B97F4A7C15)) & UINT64_MASK
+        k ^= k >> 30
+        k = (k * 0xBF58476D1CE4E5B9) & UINT64_MASK
+        return k
+
+    def get(self, board):
+        t = 1 if board.turn else 0
+        idx = self._pawn_key(board) & self.mask
+        val = int(self.table[t, idx]) // 16
+        return max(-400, min(400, val))
+
+    def update(self, board, depth, diff):
+        t = 1 if board.turn else 0
+        idx = self._pawn_key(board) & self.mask
+        target = max(-400, min(400, diff)) * 16
+        weight = min(depth * depth + 2 * depth, 128)
+        curr = int(self.table[t, idx])
+        self.table[t, idx] = (curr * (256 - weight) + target * weight) // 256
 
 
 class TranspositionTable:
@@ -150,14 +167,11 @@ class Searcher:
         self.tt = TranspositionTable(size_mb=tt_size_mb)
         self.tt_size_mb = tt_size_mb
 
-        self.params = DEFAULT_PARAMS.copy()
-
-        self.lmr_table = build_lmr_table(
-            float(self.params["lmr_base"]), float(self.params["lmr_divisor"])
-        )
+        self.lmr_table = LMR_TABLE
 
         self.history = FastHistory()
         self.counter_moves = FastCounterMoves()
+        self.corr_hist = FastCorrectionHistory()
         self.killers = np.zeros((MAX_PLY * 2, 2), dtype=np.int64)
 
         self.eval_stack = [0] * MAX_PLY
@@ -315,7 +329,7 @@ class Searcher:
                     if not child_moves:
                         score = MATE_VALUE - (ply + 1) if board.is_check() else 0
                     else:
-                        score = -self.evaluator.evaluate(board)
+                        score = -(self.evaluator.evaluate(board) + self.corr_hist.get(board))
                     board.pop(return_move=False)
                     best_score = max(best_score, score)
                 return max(best_score, 0) if draw_claim else best_score
@@ -324,7 +338,9 @@ class Searcher:
             if not has_legal_move:
                 return 0
 
-            stand_pat = self.evaluator.evaluate(board)
+            stand_pat = self.evaluator.evaluate(board) + self.corr_hist.get(board)
+            stand_pat = max(-MATE_VALUE + 1000, min(MATE_VALUE - 1000, stand_pat))
+
             if draw_claim:
                 stand_pat = max(stand_pat, 0)
             if stand_pat >= beta:
@@ -346,7 +362,7 @@ class Searcher:
                 if not child_moves:
                     score = MATE_VALUE - (ply + 1) if board.is_check() else 0
                 else:
-                    score = -self.evaluator.evaluate(board)
+                    score = -(self.evaluator.evaluate(board) + self.corr_hist.get(board))
                 board.pop(return_move=False)
                 best_score = max(best_score, score)
             return max(best_score, 0) if draw_claim else best_score
@@ -471,7 +487,8 @@ class Searcher:
             alpha = max(alpha, 0)
 
         if not in_check:
-            static_eval = self.evaluator.evaluate(board)
+            static_eval = self.evaluator.evaluate(board) + self.corr_hist.get(board)
+            static_eval = max(-MATE_VALUE + 1000, min(MATE_VALUE - 1000, static_eval))
             self.eval_stack[ply] = static_eval
             improving = ply >= 2 and static_eval > self.eval_stack[ply - 2]
         else:
@@ -485,7 +502,7 @@ class Searcher:
             and depth <= 3
             and excluded_move is None
             and not draw_claim
-            and static_eval + self.params["razor_margin"] * depth <= alpha
+            and static_eval + 342 * depth <= alpha
         ):
             return self.quiescence(board, alpha, beta, ply)
 
@@ -496,9 +513,7 @@ class Searcher:
             and excluded_move is None
             and not draw_claim
         ):
-            rfp_margin = (
-                self.params["rfp_base"] - self.params["rfp_improving"] * int(improving)
-            ) * depth
+            rfp_margin = (80 - 20 * int(improving)) * depth
             if static_eval - rfp_margin >= beta:
                 return static_eval - rfp_margin
 
@@ -514,10 +529,7 @@ class Searcher:
             if self._can_null_move(board):
                 null_move = chess.Move.null()
                 board.push(null_move)
-                r_div = max(1.0, float(self.params["nmp_divisor"]))
-                R = int(
-                    self.params["nmp_base"] + (depth // r_div) + (1 if improving else 0)
-                )
+                R = int(3 + (depth // 4) + (1 if improving else 0))
                 null_score = -self.negamax(
                     board,
                     depth - 1 - R,
@@ -539,13 +551,12 @@ class Searcher:
             allow_nmp
             and ply > 0
             and not in_check
-            and depth >= int(self.params["multicut_depth"])
+            and depth >= 6
             and abs(beta) < MATE_VALUE - 1000
             and excluded_move is None
             and not draw_claim
         ):
-            mc_r = int(self.params["multicut_r"])
-            mc_depth = depth - 1 - mc_r
+            mc_depth = depth - 1 - 3
             if mc_depth > 0:
                 mc_mailbox = self._update_mailbox(board._pieces, ply)
                 mc_legal_moves = board.legal_moves
@@ -553,11 +564,9 @@ class Searcher:
                     mc_sorted = self.score_moves_fast(
                         board, mc_legal_moves, depth, tt_move_val, prev_move, mc_mailbox
                     )
-                    mc_moves_to_test = int(self.params["multicut_m"])
-                    mc_threshold = int(self.params["multicut_c"])
                     mc_cuts = 0
 
-                    for _, mc_move in mc_sorted[:mc_moves_to_test]:
+                    for _, mc_move in mc_sorted[:8]:
                         board.push(mc_move)
                         mc_score = -self.negamax(
                             board,
@@ -576,7 +585,7 @@ class Searcher:
 
                         if mc_score >= beta:
                             mc_cuts += 1
-                            if mc_cuts >= mc_threshold:
+                            if mc_cuts >= 3:
                                 return beta
 
         if (
@@ -587,8 +596,7 @@ class Searcher:
             and excluded_move is None
             and not draw_claim
         ):
-            prob_margin = int(round(self.params["probcut_margin"]))
-            prob_beta = beta + prob_margin
+            prob_beta = beta + 200
             for move in board.generate_legal_captures()[:8]:
                 board.push(move)
                 qscore = -self.quiescence(board, -prob_beta, -prob_beta + 1, ply + 1)
@@ -608,7 +616,7 @@ class Searcher:
                 if self.stop:
                     return 0
                 if score >= prob_beta:
-                    return score - prob_margin
+                    return score - 200
 
         singular_extension = False
         if (
@@ -620,7 +628,7 @@ class Searcher:
             and tt_flag != 1
             and abs(tt_score) < MATE_VALUE - 1000
         ):
-            singular_margin = self.params["se_margin_mult"] * depth
+            singular_margin = 2 * depth
             singular_beta = tt_score - singular_margin
             singular_depth = (depth - 1) // 2
 
@@ -681,7 +689,7 @@ class Searcher:
                 board.turn,
                 move.from_square,
                 move.to_square,
-                -int(round(self.params["see_prune_margin"] * depth)),
+                -80 * depth,
             )
             board.push(move)
 
@@ -709,12 +717,7 @@ class Searcher:
                 board.pop(return_move=False)
                 continue
 
-            lmp_limit = int(
-                round(
-                    self.params["lmp_base"]
-                    + self.params["lmp_depth_factor"] * depth * depth
-                )
-            )
+            lmp_limit = 4 + depth * depth
             if (
                 excluded_move is None
                 and quiet
@@ -732,7 +735,7 @@ class Searcher:
                 and moves_searched > 0
                 and depth <= 3
                 and not draw_claim
-                and static_eval + self.params["child_futility_margin"] * depth <= alpha
+                and static_eval + 90 * depth <= alpha
             ):
                 board.pop(return_move=False)
                 continue
@@ -792,7 +795,7 @@ class Searcher:
 
                         if (
                             not in_check
-                            and static_eval - self.params["rfp_base"] * depth >= beta
+                            and static_eval - 80 * depth >= beta
                         ):
                             r += 1
                     else:
@@ -859,6 +862,17 @@ class Searcher:
                             )
                 break
 
+        if (
+            excluded_move is None
+            and not draw_claim
+            and not in_check
+            and abs(best_score) < MATE_VALUE - 1000
+        ):
+            if not (best_score >= beta and best_score <= static_eval) and not (
+                best_score <= alpha_orig and best_score >= static_eval
+            ):
+                self.corr_hist.update(board, depth, best_score - static_eval)
+
         if excluded_move is None and not draw_claim:
             flag = 0
             if best_score <= alpha_orig:
@@ -896,14 +910,15 @@ class Searcher:
 
     def _get_fen_from_board(self, board):
         rank_strs = []
-        syms = {
-            1: ("P", "p"),
-            2: ("N", "n"),
-            3: ("B", "b"),
-            4: ("R", "r"),
-            5: ("Q", "q"),
-            6: ("K", "k"),
-        }
+        syms = (
+            None,
+            ("P", "p"),
+            ("N", "n"),
+            ("B", "b"),
+            ("R", "r"),
+            ("Q", "q"),
+            ("K", "k"),
+        )
         for r in range(7, -1, -1):
             empty, r_str = 0, ""
             for f in range(8):
@@ -1007,7 +1022,7 @@ class Searcher:
                 self.sel_depth = 0
 
                 if depth >= 5 and best_val_prev is not None:
-                    delta = int(self.params["aspiration_delta"])
+                    delta = 35
                     alpha = max(-MATE_VALUE, best_val_prev - delta)
                     beta = min(MATE_VALUE, best_val_prev + delta)
 
@@ -1094,3 +1109,4 @@ class Searcher:
                 print(f"bestmove {legal_moves[0].uci()}")
 
         return best_move
+ 
