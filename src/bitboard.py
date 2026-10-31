@@ -196,6 +196,278 @@ def _queen_attacks(square, occupied):
 
 
 @njit(cache=True, fastmath=True)
+def get_color_attacks(pieces, is_white):
+    offset = 0 if is_white else 6
+    occupied = np.uint64(0)
+    for i in range(12):
+        occupied |= pieces[i]
+
+    attacks = np.uint64(0)
+    pawns = pieces[offset]
+    if is_white:
+        attacks |= ((pawns << np.uint64(7)) & ~_FILE_H) | (
+            (pawns << np.uint64(9)) & ~_FILE_A
+        )
+    else:
+        attacks |= ((pawns >> np.uint64(7)) & ~_FILE_A) | (
+            (pawns >> np.uint64(9)) & ~_FILE_H
+        )
+
+    knights = pieces[offset + 1]
+    while knights:
+        bit, sq = _pop_lsb(knights)
+        attacks |= _KNIGHT_ATTACKS[sq]
+        knights ^= bit
+
+    bishops = pieces[offset + 2]
+    while bishops:
+        bit, sq = _pop_lsb(bishops)
+        attacks |= _bishop_attacks(sq, occupied)
+        bishops ^= bit
+
+    rooks = pieces[offset + 3]
+    while rooks:
+        bit, sq = _pop_lsb(rooks)
+        attacks |= _rook_attacks(sq, occupied)
+        rooks ^= bit
+
+    queens = pieces[offset + 4]
+    while queens:
+        bit, sq = _pop_lsb(queens)
+        attacks |= _queen_attacks(sq, occupied)
+        queens ^= bit
+
+    kings = pieces[offset + 5]
+    if kings:
+        _, sq = _pop_lsb(kings)
+        attacks |= _KING_ATTACKS[sq]
+
+    return attacks
+
+
+@njit(cache=True, fastmath=True)
+def extract_indices(pieces, turn_white, out_stm, out_opp):
+    w_count = 0
+    b_count = 0
+    w_idx = np.empty(256, dtype=np.int64)
+    b_idx = np.empty(256, dtype=np.int64)
+
+    for p_type in range(6):
+        bb = pieces[p_type]
+        while bb:
+            bit, sq = _pop_lsb(bb)
+            w_idx[w_count] = p_type * 64 + sq
+            w_count += 1
+            b_idx[b_count] = (p_type + 6) * 64 + (sq ^ 56)
+            b_count += 1
+            bb ^= bit
+
+        bb = pieces[p_type + 6]
+        while bb:
+            bit, sq = _pop_lsb(bb)
+            b_idx[b_count] = p_type * 64 + (sq ^ 56)
+            b_count += 1
+            w_idx[w_count] = (p_type + 6) * 64 + sq
+            w_count += 1
+            bb ^= bit
+
+    w_attacks = get_color_attacks(pieces, True)
+    b_attacks = get_color_attacks(pieces, False)
+
+    w_occ = pieces[0] | pieces[1] | pieces[2] | pieces[3] | pieces[4] | pieces[5]
+    b_occ = pieces[6] | pieces[7] | pieces[8] | pieces[9] | pieces[10] | pieces[11]
+
+    contested = w_attacks & b_attacks
+    while contested:
+        bit, sq = _pop_lsb(contested)
+        w_idx[w_count] = 768 + sq
+        w_count += 1
+        b_idx[b_count] = 768 + (sq ^ 56)
+        b_count += 1
+        contested ^= bit
+
+    w_attacked = w_occ & b_attacks
+    b_attacked = b_occ & w_attacks
+    w_hanging = w_attacked & ~w_attacks
+    b_hanging = b_attacked & ~b_attacks
+
+    bb = w_attacked
+    while bb:
+        bit, sq = _pop_lsb(bb)
+        w_idx[w_count] = 832 + sq
+        w_count += 1
+        b_idx[b_count] = 896 + (sq ^ 56)
+        b_count += 1
+        bb ^= bit
+
+    bb = b_attacked
+    while bb:
+        bit, sq = _pop_lsb(bb)
+        w_idx[w_count] = 896 + sq
+        w_count += 1
+        b_idx[b_count] = 832 + (sq ^ 56)
+        b_count += 1
+        bb ^= bit
+
+    bb = w_hanging
+    while bb:
+        bit, sq = _pop_lsb(bb)
+        w_idx[w_count] = 960 + sq
+        w_count += 1
+        b_idx[b_count] = 1024 + (sq ^ 56)
+        b_count += 1
+        bb ^= bit
+
+    bb = b_hanging
+    while bb:
+        bit, sq = _pop_lsb(bb)
+        w_idx[w_count] = 1024 + sq
+        w_count += 1
+        b_idx[b_count] = 960 + (sq ^ 56)
+        b_count += 1
+        bb ^= bit
+
+    if pieces[5]:
+        _, wk_sq = _pop_lsb(pieces[5])
+        bb = b_attacks & _KING_ZONE_MASK[wk_sq]
+        while bb:
+            bit, sq = _pop_lsb(bb)
+            w_idx[w_count] = 1088 + sq
+            w_count += 1
+            b_idx[b_count] = 1152 + (sq ^ 56)
+            b_count += 1
+            bb ^= bit
+        if b_attacks & (np.uint64(1) << np.uint64(wk_sq)):
+            w_idx[w_count] = 1216
+            w_count += 1
+
+    if pieces[11]:
+        _, bk_sq = _pop_lsb(pieces[11])
+        bb = w_attacks & _KING_ZONE_MASK[bk_sq]
+        while bb:
+            bit, sq = _pop_lsb(bb)
+            b_idx[b_count] = 1088 + (sq ^ 56)
+            b_count += 1
+            w_idx[w_count] = 1152 + sq
+            w_count += 1
+            bb ^= bit
+        if w_attacks & (np.uint64(1) << np.uint64(bk_sq)):
+            b_idx[b_count] = 1216
+            b_count += 1
+
+    w_pawns = pieces[0]
+    b_pawns = pieces[6]
+
+    bb = w_pawns
+    while bb:
+        bit, sq = _pop_lsb(bb)
+        if not (b_pawns & _PASSED_WHITE[sq]):
+            w_idx[w_count] = 1217 + sq
+            w_count += 1
+            b_idx[b_count] = 1281 + (sq ^ 56)
+            b_count += 1
+        bb ^= bit
+
+    bb = b_pawns
+    while bb:
+        bit, sq = _pop_lsb(bb)
+        if not (w_pawns & _PASSED_BLACK[sq]):
+            b_idx[b_count] = 1217 + (sq ^ 56)
+            b_count += 1
+            w_idx[w_count] = 1281 + sq
+            w_count += 1
+        bb ^= bit
+
+    for f in range(8):
+        f_mask = _FILES[f]
+        adj_mask = _ADJACENT_FILES[f]
+        wp_f = w_pawns & f_mask
+        if wp_f:
+            if not (w_pawns & adj_mask):
+                bb = wp_f
+                while bb:
+                    bit, sq = _pop_lsb(bb)
+                    w_idx[w_count] = 1345 + sq
+                    w_count += 1
+                    b_idx[b_count] = 1409 + (sq ^ 56)
+                    b_count += 1
+                    bb ^= bit
+            if wp_f & (wp_f - np.uint64(1)):
+                bb = wp_f
+                while bb:
+                    bit, sq = _pop_lsb(bb)
+                    w_idx[w_count] = 1473 + sq
+                    w_count += 1
+                    b_idx[b_count] = 1537 + (sq ^ 56)
+                    b_count += 1
+                    bb ^= bit
+
+        bp_f = b_pawns & f_mask
+        if bp_f:
+            if not (b_pawns & adj_mask):
+                bb = bp_f
+                while bb:
+                    bit, sq = _pop_lsb(bb)
+                    b_idx[b_count] = 1345 + (sq ^ 56)
+                    b_count += 1
+                    w_idx[w_count] = 1409 + sq
+                    w_count += 1
+                    bb ^= bit
+            if bp_f & (bp_f - np.uint64(1)):
+                bb = bp_f
+                while bb:
+                    bit, sq = _pop_lsb(bb)
+                    b_idx[b_count] = 1473 + (sq ^ 56)
+                    b_count += 1
+                    w_idx[w_count] = 1537 + sq
+                    w_count += 1
+                    bb ^= bit
+
+    w_pattacks = ((w_pawns & ~_FILE_H) << np.uint64(9)) | (
+        (w_pawns & ~_FILE_A) << np.uint64(7)
+    )
+    w_phalanx = ((w_pawns & ~_FILE_H) << np.uint64(1)) | (
+        (w_pawns & ~_FILE_A) >> np.uint64(1)
+    )
+    bb = w_pawns & (w_pattacks | w_phalanx)
+    while bb:
+        bit, sq = _pop_lsb(bb)
+        w_idx[w_count] = 1601 + sq
+        w_count += 1
+        b_idx[b_count] = 1665 + (sq ^ 56)
+        b_count += 1
+        bb ^= bit
+
+    b_pattacks = ((b_pawns & ~_FILE_A) >> np.uint64(9)) | (
+        (b_pawns & ~_FILE_H) >> np.uint64(7)
+    )
+    b_phalanx = ((b_pawns & ~_FILE_A) >> np.uint64(1)) | (
+        (b_pawns & ~_FILE_H) << np.uint64(1)
+    )
+    bb = b_pawns & (b_pattacks | b_phalanx)
+    while bb:
+        bit, sq = _pop_lsb(bb)
+        b_idx[b_count] = 1601 + (sq ^ 56)
+        b_count += 1
+        w_idx[w_count] = 1665 + sq
+        w_count += 1
+        bb ^= bit
+
+    if turn_white:
+        for i in range(w_count):
+            out_stm[i] = w_idx[i]
+        for i in range(b_count):
+            out_opp[i] = b_idx[i]
+        return w_count, b_count
+    else:
+        for i in range(b_count):
+            out_stm[i] = b_idx[i]
+        for i in range(w_count):
+            out_opp[i] = w_idx[i]
+        return b_count, w_count
+
+
+@njit(cache=True, fastmath=True)
 def is_attacked(square, by_white, pieces):
     occupied = np.uint64(0)
     for i in range(12):
@@ -683,6 +955,73 @@ def _apply_encoded(pieces, white_to_move, castling, ep_square, value):
     if moving_type == PAWN and abs(target - source) == 16:
         next_ep = (source + target) // 2
     return not white_to_move, castling, next_ep
+
+
+@njit(cache=True, fastmath=True)
+def _perft_stack(
+    pieces,
+    white_to_move,
+    castling,
+    ep_square,
+    depth,
+    piece_stack,
+    pseudo_stack,
+    move_stack,
+    ply,
+):
+    if depth == 0:
+        return 1
+    moves, count = _generate_legal_into(
+        pieces,
+        white_to_move,
+        castling,
+        ep_square,
+        pseudo_stack[ply],
+        move_stack[ply],
+    )
+    nodes = 0
+    for index in range(count):
+        for p_idx in range(12):
+            piece_stack[ply + 1, p_idx] = pieces[p_idx]
+        child_turn, child_castling, child_ep = _apply_encoded(
+            piece_stack[ply + 1],
+            white_to_move,
+            castling,
+            ep_square,
+            moves[index],
+        )
+        nodes += _perft_stack(
+            piece_stack[ply + 1],
+            child_turn,
+            child_castling,
+            child_ep,
+            depth - 1,
+            piece_stack,
+            pseudo_stack,
+            move_stack,
+            ply + 1,
+        )
+    return nodes
+
+
+@njit(cache=True, fastmath=True)
+def _perft_encoded(pieces, white_to_move, castling, ep_square, depth):
+    piece_stack = np.empty((depth + 1, 12), dtype=np.uint64)
+    pseudo_stack = np.empty((depth + 1, 256), dtype=np.int64)
+    move_stack = np.empty((depth + 1, 256), dtype=np.int64)
+    for p_idx in range(12):
+        piece_stack[0, p_idx] = pieces[p_idx]
+    return _perft_stack(
+        piece_stack[0],
+        white_to_move,
+        castling,
+        ep_square,
+        depth,
+        piece_stack,
+        pseudo_stack,
+        move_stack,
+        0,
+    )
 
 
 @njit(cache=True, fastmath=True)
@@ -1259,3 +1598,14 @@ class Board:
             )
         )
         self._hash_history = [int(self._hash)]
+
+    def perft(self, depth):
+        return int(
+            _perft_encoded(
+                self._pieces,
+                self.turn,
+                self.castling_rights,
+                self.ep_square,
+                depth,
+            )
+        )
