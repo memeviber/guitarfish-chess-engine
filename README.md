@@ -1,6 +1,6 @@
-<img src="logo.jpg" alt="Shovelnose Guitarfish" width="460" height="285"/>
+<img src="logo.jpg" alt="Shovelnose Guitarfish" height="285"/>
 
-Guitarfish (6.4.54@6.5) is an open-source UCI-compliant chess engine written in Python, featuring a custom 64-bit bitboard move generator accelerated by Numba JIT and an evaluation function powered by a neural network (Custom NNUE).
+Guitarfish v6.4 is an open-source UCI-compliant chess engine written in Python, featuring a custom 64-bit bitboard move generator accelerated by Numba JIT and an evaluation function powered by a neural network (Custom NNUE).
 
 ---
 
@@ -86,10 +86,10 @@ Perft test on the standard starting position:
 
 ## Requirements
 
-- Python 3.9 or higher
+- Python 3.11 or higher
 - NumPy
 - Numba
-- ONNX Runtime
+- Python-Chess
 
 Install dependencies via `pip`:
 

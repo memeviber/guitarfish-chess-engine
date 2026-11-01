@@ -67,7 +67,7 @@ class OnlineTablebase:
 
             req = urllib.request.Request(
                 url,
-                headers={"User-Agent": "Guitarfish-Engine/6.1"},
+                headers={"User-Agent": "Guitarfish-Engine/v6.4"},
             )
 
             with urllib.request.urlopen(

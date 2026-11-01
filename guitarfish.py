@@ -8,6 +8,7 @@ if __name__ == "__main__":
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ["NUMBA_CACHE_DIR"] = "./guitarfish_numba_cache"
 
     if len(sys.argv) > 4:
         print(
@@ -18,9 +19,7 @@ if __name__ == "__main__":
 
     bundle_dir = getattr(sys, "_MEIPASS", None)
     default_model = (
-        os.path.join(bundle_dir, "guitarfish.gm")
-        if bundle_dir
-        else "guitarfish.gm"
+        os.path.join(bundle_dir, "guitarfish.gm") if bundle_dir else "guitarfish.gm"
     )
     model_file = sys.argv[1] if len(sys.argv) > 1 else default_model
     book_file = sys.argv[2] if len(sys.argv) > 2 else ""

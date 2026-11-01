@@ -70,8 +70,7 @@ def warmup(searcher, chess):
     start = time.perf_counter()
     try:
         dummy_board = chess.Board()
-        searcher.search(dummy_board, fixed_depth=4, shut_up=True)
-        searcher.search(dummy_board, fixed_depth=4, shut_up=True)
+        searcher.search(dummy_board, fixed_depth=2, shut_up=True)
         searcher.tt.clear()
         searcher.history.clear()
         searcher.counter_moves.clear()
@@ -83,6 +82,7 @@ def warmup(searcher, chess):
         )
     except Exception as e:
         print(f"Numba JIT warmup failed: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
 
 
 def uci_loop(model_path="guitarfish.gm", book_path="", tt_size_mb=256):
@@ -103,9 +103,7 @@ def uci_loop(model_path="guitarfish.gm", book_path="", tt_size_mb=256):
 
             new_board = chess.Board()
             new_evaluator = Evaluator(model_path)
-            new_searcher = Searcher(
-                new_evaluator, book_path, tt_size_mb=tt_size_mb
-            )
+            new_searcher = Searcher(new_evaluator, book_path, tt_size_mb=tt_size_mb)
             try:
                 new_searcher.own_book = own_book
                 new_searcher.online_tablebase_enabled = online_tablebase_enabled
@@ -201,7 +199,9 @@ def uci_loop(model_path="guitarfish.gm", book_path="", tt_size_mb=256):
                     try:
                         searcher.set_syzygy_path(value)
                     except Exception as exc:
-                        print(f"info string SyzygyPath update failed: {exc}", flush=True)
+                        print(
+                            f"info string SyzygyPath update failed: {exc}", flush=True
+                        )
                     else:
                         syzygy_path = value
             elif name == "onlinetablebase":
