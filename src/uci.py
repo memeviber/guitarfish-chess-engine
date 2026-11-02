@@ -62,7 +62,7 @@ def handle_position(board, parts, chess):
         return
 
     for m in moves:
-        board.push(chess.Move.from_uci(m))
+        board.push(chess.move_from_uci(m))
 
 
 def warmup(searcher, chess):
@@ -97,10 +97,11 @@ def uci_loop(model_path="guitarfish.gm", book_path="", tt_size_mb=256):
     def ensure_model_and_numba_warmed_up():
         nonlocal board, chess, evaluator, searcher
         if searcher is None:
-            import src.bitboard as chess
+            import src.bitboard as chess_mod
             from src.evaluate import Evaluator
             from src.search import Searcher
 
+            chess = chess_mod
             new_board = chess.Board()
             new_evaluator = Evaluator(model_path)
             new_searcher = Searcher(new_evaluator, book_path, tt_size_mb=tt_size_mb)
@@ -224,7 +225,13 @@ def uci_loop(model_path="guitarfish.gm", book_path="", tt_size_mb=256):
                 searcher.counter_moves.clear()
 
         elif cmd == "position":
-            if board is None:
+            try:
+                ensure_model_and_numba_warmed_up()
+            except Exception as exc:
+                print(f"info string Engine initialization failed: {exc}", flush=True)
+                continue
+
+            if board is None or chess is None:
                 print(
                     "info string Engine is not initialized; send isready first",
                     flush=True,
@@ -251,13 +258,13 @@ def uci_loop(model_path="guitarfish.gm", book_path="", tt_size_mb=256):
             time_left = (wtime if is_white else btime) / 1000.0
             inc = (winc if is_white else binc) / 1000.0
 
-            last_opp_move = board.move_stack[-1].uci() if board.move_stack else None
+            last_opp_move = chess.move_to_uci(board.move_stack[-1]) if board.move_stack else None
             if (
                 0 < time_left < 3.0
                 and searcher.expected_opponent_move == last_opp_move
                 and searcher.premove_reply is not None
             ):
-                premove = chess.Move.from_uci(searcher.premove_reply)
+                premove = chess.move_from_uci(searcher.premove_reply)
                 if board.is_legal(premove):
                     print(f"bestmove {searcher.premove_reply}", flush=True)
                     continue

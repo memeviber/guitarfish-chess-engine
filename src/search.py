@@ -498,7 +498,8 @@ class Searcher:
             return self.quiescence(board, alpha, beta, ply)
 
         if (
-            not in_check
+            ply > 0
+            and not in_check
             and depth <= 6
             and abs(beta) < MATE_VALUE - 1000
             and excluded_move == 0
